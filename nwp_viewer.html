@@ -1,0 +1,1002 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Serverless Generic NWP Globe (WASM)</title>
+    
+    <!-- Dependencies -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <style>
+        body {
+            margin: 0;
+            background-color: #050505;
+            color: #eee;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        
+        #render-container {
+            position: absolute;
+            inset: 0;
+            cursor: grab;
+        }
+        #render-container:active {
+            cursor: grabbing;
+        }
+
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(15, 15, 15, 0.85);
+            padding: 20px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            width: 340px;
+            max-height: 90vh;
+            overflow-y: auto;
+            backdrop-filter: blur(8px);
+            z-index: 100;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            box-sizing: border-box;
+        }
+
+        /* Scrollbar styling for overlay */
+        .ui-overlay::-webkit-scrollbar { width: 6px; }
+        .ui-overlay::-webkit-scrollbar-track { background: transparent; }
+        .ui-overlay::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 3px; }
+
+        h1 {
+            margin: 0;
+            margin-bottom: 5px;
+            font-size: 16px;
+            color: #4db8ff;
+            letter-spacing: 1px;
+        }
+        
+        .description {
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 15px;
+            line-height: 1.4;
+        }
+
+        .control-group {
+            margin-bottom: 12px;
+        }
+        
+        .control-group label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+            font-weight: bold;
+            text-transform: uppercase;
+            color: #888;
+            margin-bottom: 5px;
+        }
+
+        input[type="date"], select, input[type="range"] {
+            width: 100%;
+            background: #222;
+            color: #eee;
+            border: 1px solid #444;
+            padding: 8px;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-family: inherit;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        
+        select option {
+            background: #1a1a1a;
+            color: #fff;
+        }
+
+        ::-webkit-calendar-picker-indicator {
+            filter: invert(1);
+            cursor: pointer;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 8px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: bold;
+            background: #222;
+            width: 100%;
+            box-sizing: border-box;
+            text-align: center;
+            color: #ffb84d;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+
+        .btn {
+            background: #4db8ff;
+            border: none;
+            color: #000;
+            padding: 10px;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            width: 100%;
+            text-transform: uppercase;
+            font-size: 11px;
+            transition: background 0.2s;
+            margin-top: 5px;
+        }
+        .btn:hover { background: #80ccff; }
+        .btn:disabled { background: #333; color: #666; cursor: not-allowed; }
+        
+        .btn-outline {
+            background: transparent;
+            border: 1px solid #4db8ff;
+            color: #4db8ff;
+        }
+        .btn-outline:hover { background: rgba(77, 184, 255, 0.1); }
+
+        .divider {
+            height: 1px;
+            background: rgba(255,255,255,0.1);
+            margin: 15px 0;
+        }
+
+        #legend-container {
+            margin-top: 15px;
+            display: none;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 6px;
+        }
+
+        #legend {
+            height: 12px;
+            background: linear-gradient(to right, rgb(0,0,128), rgb(0,0,255), rgb(0,255,255), rgb(255,255,0), rgb(255,0,0));
+            border-radius: 2px;
+        }
+        
+        #legend-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: #ccc;
+            margin-top: 5px;
+            font-family: monospace;
+        }
+
+        /* Tooltip Styling */
+        #data-tooltip {
+            position: absolute;
+            display: none;
+            background: rgba(15, 15, 15, 0.95);
+            color: #eee;
+            padding: 10px 14px;
+            border-radius: 8px;
+            font-size: 11px;
+            pointer-events: none;
+            z-index: 1000;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            backdrop-filter: blur(8px);
+            white-space: nowrap;
+            line-height: 1.6;
+        }
+    </style>
+
+    <!-- Configure WASM Loading to point to the local files -->
+    <script>
+        var Module = {
+            onRuntimeInitialized: () => {
+                console.log('[WASM] g2clib runtime is ready.');
+                window.dispatchEvent(new CustomEvent('wasmReady'));
+            },
+            locateFile: (path) => {
+                if (path.endsWith('.wasm')) return 'g2clib.wasm';
+                return path;
+            }
+        };
+    </script>
+    <script src="g2clib.js"></script>
+</head>
+<body>
+
+    <div id="render-container"></div>
+    <div id="data-tooltip"></div>
+    
+    <div class="ui-overlay">
+        <h1>GENERIC NWP GLOBE</h1>
+        <p class="description">Live Serverless Decoder (WASM)</p>
+        
+        <div class="status-badge" id="status-indicator">INITIALIZING WASM...</div>
+
+        <!-- STAGE 1: Time & Index Selection -->
+        <div class="control-group">
+            <label>Model Run</label>
+            <div style="display:flex; gap:5px;">
+                <input type="date" id="date-picker">
+                <select id="cycle-select" style="width: 80px;">
+                    <option value="00">00Z</option>
+                    <option value="06">06Z</option>
+                    <option value="12" selected>12Z</option>
+                    <option value="18">18Z</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label><span>Forecast Horizon</span><span style="color:#4db8ff">+<span id="fhr-label">006</span>h</span></label>
+            <input type="range" id="fhr-slider" min="0" max="120" step="3" value="6">
+        </div>
+
+        <button id="btn-load-idx" class="btn btn-outline" disabled>1. Load NWP Inventory</button>
+
+        <!-- STAGE 2: Data Extraction -->
+        <div id="extraction-controls" style="display:none;">
+            <div class="divider"></div>
+            
+            <div class="control-group">
+                <label>Product / Variable</label>
+                <select id="product-select"></select>
+            </div>
+            
+            <div class="control-group">
+                <label>Vertical Level</label>
+                <select id="level-select"></select>
+            </div>
+
+            <div id="vector-controls" style="display:none;">
+                <div class="control-group">
+                    <label>Barb Density</label>
+                    <input type="range" id="density-slider" min="1" max="10" value="8">
+                </div>
+                <div class="control-group">
+                    <label>Vector Resolution</label>
+                    <select id="res-select">
+                        <option value="1">Standard</option>
+                        <option value="2" selected>High (2x)</option>
+                        <option value="4">Ultra (4x)</option>
+                    </select>
+                </div>
+            </div>
+
+            <button id="btn-render" class="btn">2. Fetch & Render Data</button>
+
+            <div id="legend-container">
+                <div style="text-align:center; font-size:10px; color:#888; margin-bottom:5px; text-transform:uppercase;" id="legend-title">Data Scale</div>
+                <div id="legend"></div>
+                <div id="legend-labels"><span>MIN</span><span>MAX</span></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const EARTH_RADIUS = 100;
+        const S3_BUCKET_URL = 'https://noaa-gfs-bdp-pds.s3.amazonaws.com/';
+        const PRODUCT = "pgrb2.0p50"; // 0.50 degree matches the provided idx string context exactly
+        
+        let scene, camera, renderer, earthGroup, earthSphere, dataMesh;
+        let isDragging = false;
+        let prevMouse = { x: 0, y: 0 };
+
+        // Global State variables for interactive data lookups
+        let currentUrlBase = "";
+        let productsDb = {}; 
+        let currentDecodedData = null;
+        let currentProductType = null; // 'scalar' or 'vector'
+
+        // Human-readable aliases for common acronyms
+        const PRODUCT_ALIASES = {
+            'TMP': 'Temperature', 'UGRD': 'U-Wind Component', 'VGRD': 'V-Wind Component', 
+            'WIND': 'Wind Vectors (U+V)', 'RH': 'Relative Humidity', 'SPFH': 'Specific Humidity', 
+            'TCDC': 'Total Cloud Cover', 'LCDC': 'Low Cloud Cover', 'MCDC': 'Mid Cloud Cover', 
+            'HCDC': 'High Cloud Cover', 'HGT': 'Geopotential Height', 'APCP': 'Total Precipitation', 
+            'PRATE': 'Precipitation Rate', 'VVEL': 'Vertical Velocity', 'REFC': 'Composite Reflectivity', 
+            'PRES': 'Pressure', 'GUST': 'Surface Wind Gust', 'CAPE': 'CAPE', 'CIN': 'CIN',
+            'CLMR': 'Cloud Mixing Ratio', 'ICMR': 'Ice Mixing Ratio', 'SNMR': 'Snow Mixing Ratio',
+            'RWMR': 'Rain Mixing Ratio'
+        };
+
+        // --- Core Three.js ---
+        function initGlobe() {
+            const container = document.getElementById('render-container');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
+            camera.position.z = 350;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+            const sun = new THREE.DirectionalLight(0xffffff, 1.3);
+            sun.position.set(5, 3, 5);
+            scene.add(sun);
+
+            earthGroup = new THREE.Group();
+            scene.add(earthGroup);
+
+            const earthGeom = new THREE.SphereGeometry(EARTH_RADIUS, 128, 64);
+            const textureLoader = new THREE.TextureLoader();
+            const earthMat = new THREE.MeshPhongMaterial({
+                color: 0xffffff,
+                emissive: 0xffffff,
+                emissiveIntensity: 0.3,
+                specular: 0x222222,
+                shininess: 15,
+                map: textureLoader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg'),
+                emissiveMap: textureLoader.load('https://unpkg.com/three-globe/example/img/earth-night.jpg')
+            });
+            earthSphere = new THREE.Mesh(earthGeom, earthMat);
+            earthGroup.add(earthSphere);
+
+            // Start oriented over North America
+            earthGroup.rotation.y = Math.PI / 1.5; 
+            earthGroup.rotation.x = Math.PI / 8;
+
+            setupInteraction(container);
+            animate();
+        }
+
+        // --- Globe Interactive Events (Drag & Raycasting) ---
+        function setupInteraction(container) {
+            let mousedownPos = { x: 0, y: 0 };
+            
+            container.addEventListener('mousedown', (e) => {
+                if (e.target.closest('.ui-overlay')) return;
+                isDragging = true;
+                mousedownPos = { x: e.clientX, y: e.clientY };
+                prevMouse = { x: e.clientX, y: e.clientY };
+                // Hide tooltip when interacting
+                document.getElementById('data-tooltip').style.display = 'none';
+            });
+            
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const delta = { x: e.clientX - prevMouse.x, y: e.clientY - prevMouse.y };
+                earthGroup.rotation.y += delta.x * 0.005;
+                earthGroup.rotation.x += delta.y * 0.005;
+                prevMouse = { x: e.clientX, y: e.clientY };
+            });
+            
+            window.addEventListener('mouseup', (e) => { 
+                if (isDragging) {
+                    // If mouse moved very little, treat as a click to query data
+                    const dist = Math.hypot(e.clientX - mousedownPos.x, e.clientY - mousedownPos.y);
+                    if (dist < 5 && e.target.closest('#render-container')) {
+                        handleGlobeClick(e);
+                    }
+                }
+                isDragging = false; 
+            });
+            
+            container.addEventListener('wheel', (e) => {
+                if (e.target.closest('.ui-overlay')) return;
+                const zoomDelta = e.deltaY * 0.5;
+                camera.position.z = Math.max(120, Math.min(600, camera.position.z + zoomDelta));
+            }, { passive: true });
+            
+            window.addEventListener('resize', () => {
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            });
+        }
+
+        // Computes geographic location and accesses loaded memory
+        function handleGlobeClick(e) {
+            if (!currentDecodedData) return;
+            
+            const container = document.getElementById('render-container');
+            const rect = container.getBoundingClientRect();
+            
+            const mouse = new THREE.Vector2();
+            mouse.x = ((e.clientX - rect.left) / container.clientWidth) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / container.clientHeight) * 2 + 1;
+
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(mouse, camera);
+            
+            // Raycast against the base earth sphere geometry
+            const intersects = raycaster.intersectObject(earthSphere);
+
+            if (intersects.length > 0) {
+                const uv = intersects[0].uv;
+                
+                // Map UV to Lat/Lon
+                // Standard sphere maps UV (0->1) to Lon (-180->180) and Lat (-90->90)
+                const lon = (uv.x * 360) - 180;
+                const lat = (uv.y * 180) - 90;
+
+                // Extract grid dimensions from loaded NWP metadata
+                let grid = currentProductType === 'scalar' ? currentDecodedData.metadata.grid : currentDecodedData.u.metadata.grid;
+                const nx = grid.nx;
+                const ny = grid.ny;
+
+                // Map Geographic Lat/Lon to GFS grid indices
+                // GFS Longitude array spans 0 to 360, Latitude usually spans 90 to -90
+                let normLon = lon < 0 ? lon + 360 : lon;
+                let i = Math.round((normLon / 360) * nx) % nx;
+                let j = Math.round(((90 - lat) / 180) * (ny - 1));
+
+                // Safety clamps
+                i = Math.max(0, Math.min(i, nx - 1));
+                j = Math.max(0, Math.min(j, ny - 1));
+
+                const dataIdx = j * nx + i;
+                
+                let valStr = "";
+                const prodKey = document.getElementById('product-select').value;
+                const levelKey = document.getElementById('level-select').value;
+
+                if (currentProductType === 'scalar') {
+                    let val = currentDecodedData.values[dataIdx];
+                    if (['TMP', 'DPT'].includes(prodKey)) {
+                        const f = (val - 273.15) * 9/5 + 32;
+                        valStr = `${val.toFixed(1)} K <span style="color:#aaa;">(${f.toFixed(1)} °F)</span>`;
+                    } else {
+                        valStr = formatLegendValue(val);
+                    }
+                } else {
+                    const u = currentDecodedData.u.values[dataIdx];
+                    const v = currentDecodedData.v.values[dataIdx];
+                    const spd = Math.sqrt(u*u + v*v) * 1.94384; 
+                    const dir = (270 - Math.atan2(v, u) * (180 / Math.PI)) % 360;
+                    valStr = `${spd.toFixed(1)} kts <span style="color:#aaa;">@ ${Math.round(dir)}°</span>`;
+                }
+
+                const tooltip = document.getElementById('data-tooltip');
+                const title = PRODUCT_ALIASES[prodKey] || prodKey;
+                tooltip.innerHTML = `
+                    <div style="color:#4db8ff; font-weight:bold; font-size:12px; margin-bottom:4px; border-bottom:1px solid rgba(255,255,255,0.2); padding-bottom:4px;">
+                        ${title} (${levelKey})
+                    </div>
+                    <strong>Lat:</strong> ${lat.toFixed(2)}°<br>
+                    <strong>Lon:</strong> ${lon.toFixed(2)}°<br>
+                    <div style="margin-top:6px; font-size:13px;"><strong>Value:</strong> ${valStr}</div>
+                `;
+                
+                // Smart positioning to keep tooltip within viewport
+                let posX = e.clientX + 15;
+                let posY = e.clientY + 15;
+                tooltip.style.display = 'block';
+                
+                if (posX + tooltip.offsetWidth > window.innerWidth) {
+                    posX = e.clientX - tooltip.offsetWidth - 15;
+                }
+                if (posY + tooltip.offsetHeight > window.innerHeight) {
+                    posY = e.clientY - tooltip.offsetHeight - 15;
+                }
+                
+                tooltip.style.left = `${posX}px`;
+                tooltip.style.top = `${posY}px`;
+            } else {
+                document.getElementById('data-tooltip').style.display = 'none';
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        function setStatus(msg, color = '#ffb84d') {
+            const el = document.getElementById('status-indicator');
+            el.innerText = msg;
+            el.style.color = color;
+        }
+
+        // --- Dynamic Architecture Parsing ---
+
+        async function loadNWPInventory() {
+            const btnIdx = document.getElementById('btn-load-idx');
+            btnIdx.disabled = true;
+            
+            const dateInput = document.getElementById('date-picker').value.replace(/-/g, '');
+            const cycle = document.getElementById('cycle-select').value;
+            const fhr = String(document.getElementById('fhr-slider').value).padStart(3, '0');
+            
+            const fileBase = `gfs.t${cycle}z.${PRODUCT}.f${fhr}`;
+            currentUrlBase = `${S3_BUCKET_URL}gfs.${dateInput}/${cycle}/atmos/${fileBase}`;
+
+            try {
+                setStatus(`FETCHING GRIB INDEX...`);
+                const res = await fetch(`${currentUrlBase}.idx`);
+                if (!res.ok) throw new Error("Data not available for this time.");
+                const idxText = await res.text();
+                
+                parseIndexFile(idxText);
+                
+                setStatus(`INVENTORY LOADED (${Object.keys(productsDb).length} Products)`, "#00ff88");
+                document.getElementById('extraction-controls').style.display = 'block';
+            } catch (e) {
+                console.error(e);
+                setStatus(`ERROR: ${e.message}`, "#ff4d4d");
+                document.getElementById('extraction-controls').style.display = 'none';
+            } finally {
+                btnIdx.disabled = false;
+            }
+        }
+
+        function parseIndexFile(idxText) {
+            const lines = idxText.split('\n').filter(l => l.trim().length > 0);
+            const startBytes = lines.map(line => parseInt(line.split(':')[1], 10));
+            
+            productsDb = {};
+            
+            for (let i = 0; i < lines.length; i++) {
+                const parts = lines[i].split(':');
+                if (parts.length < 5) continue;
+                
+                const product = parts[3];
+                const level = parts[4];
+                const endByte = (i + 1 < startBytes.length && !isNaN(startBytes[i+1])) ? String(startBytes[i+1] - 1) : '';
+                
+                if (!productsDb[product]) {
+                    productsDb[product] = { levels: new Set(), items: {}, isVector: false };
+                }
+                
+                productsDb[product].levels.add(level);
+                productsDb[product].items[level] = { start: startBytes[i], end: endByte };
+            }
+
+            // Synthesize Generic 'WIND' Vector product where both U and V exist
+            if (productsDb['UGRD'] && productsDb['VGRD']) {
+                const uLevels = Array.from(productsDb['UGRD'].levels);
+                const commonLevels = uLevels.filter(l => productsDb['VGRD'].levels.has(l));
+                if (commonLevels.length > 0) {
+                    productsDb['WIND'] = {
+                        isVector: true,
+                        levels: new Set(commonLevels)
+                    };
+                }
+            }
+
+            populateProductDropdown();
+        }
+
+        function populateProductDropdown() {
+            const select = document.getElementById('product-select');
+            select.innerHTML = '';
+            
+            // Sort products alphabetically, but prioritize WIND
+            const keys = Object.keys(productsDb).sort((a, b) => {
+                if (a === 'WIND') return -1;
+                if (b === 'WIND') return 1;
+                return a.localeCompare(b);
+            });
+
+            keys.forEach(k => {
+                const opt = document.createElement('option');
+                opt.value = k;
+                opt.innerText = PRODUCT_ALIASES[k] ? `${k} - ${PRODUCT_ALIASES[k]}` : k;
+                select.appendChild(opt);
+            });
+
+            // Set up listener for product change to repopulate levels
+            select.onchange = () => populateLevelDropdown(select.value);
+            // Trigger first population
+            populateLevelDropdown(keys[0]);
+        }
+
+        function sortMeteorologicalLevels(levelsArray) {
+            return levelsArray.sort((a, b) => {
+                const numA = parseFloat(a);
+                const numB = parseFloat(b);
+                const isNumA = !isNaN(numA);
+                const isNumB = !isNaN(numB);
+                
+                if (isNumA && isNumB) {
+                    // For isobaric surfaces (mb), sort logically from surface to top of atmosphere
+                    if (a.includes('mb') && b.includes('mb')) return numB - numA;
+                    // Otherwise sort ascending
+                    return numA - numB;
+                }
+                if (isNumA) return -1;
+                if (isNumB) return 1;
+                return a.localeCompare(b);
+            });
+        }
+
+        function populateLevelDropdown(productKey) {
+            const select = document.getElementById('level-select');
+            select.innerHTML = '';
+            
+            if (!productsDb[productKey]) return;
+
+            if (productsDb[productKey].isVector) {
+                document.getElementById('vector-controls').style.display = 'block';
+            } else {
+                document.getElementById('vector-controls').style.display = 'none';
+            }
+
+            const levels = Array.from(productsDb[productKey].levels);
+            const sortedLevels = sortMeteorologicalLevels(levels);
+
+            sortedLevels.forEach(lvl => {
+                const opt = document.createElement('option');
+                opt.value = lvl;
+                opt.innerText = lvl;
+                select.appendChild(opt);
+            });
+        }
+
+        // --- Data Extraction & WebAssembly ---
+        
+        function processGribData(gribMessageBuffer) {
+            const dataPtr = Module._malloc(gribMessageBuffer.byteLength);
+            if (!dataPtr) throw new Error("WASM Memory Allocation failed.");
+            try {
+                Module.HEAPU8.set(new Uint8Array(gribMessageBuffer), dataPtr);
+                const resultPtr = Module.ccall('process_grib_field', 'number', ['number', 'number', 'number'], [dataPtr, gribMessageBuffer.byteLength, 1]);
+                if (!resultPtr) throw new Error("C function returned NULL.");
+                
+                const metadataJsonPtr = Module.getValue(resultPtr, '*');
+                const metadataLen = Module.getValue(resultPtr + 4, 'i32');
+                const dataPtr_ = Module.getValue(resultPtr + 8, '*');
+                const numPoints = Module.getValue(resultPtr + 16, 'i32');
+                
+                const metadata = JSON.parse(Module.UTF8ToString(metadataJsonPtr, metadataLen));
+                const values = new Float32Array(Module.HEAPU8.buffer, dataPtr_, numPoints).slice();
+                
+                Module.ccall('free_result_memory', null, ['number'], [resultPtr]);
+                return { metadata, values };
+            } finally {
+                Module._free(dataPtr);
+            }
+        }
+
+        async function fetchAndRenderLayer() {
+            const btn = document.getElementById('btn-render');
+            btn.disabled = true;
+            document.getElementById('data-tooltip').style.display = 'none';
+            currentDecodedData = null; // Clear old data
+            
+            const prod = document.getElementById('product-select').value;
+            const level = document.getElementById('level-select').value;
+            const config = productsDb[prod];
+
+            try {
+                if (config.isVector) {
+                    setStatus(`DOWNLOADING U & V COMPONENTS...`);
+                    const uItem = productsDb['UGRD'].items[level];
+                    const vItem = productsDb['VGRD'].items[level];
+                    
+                    const [uRes, vRes] = await Promise.all([
+                        fetch(currentUrlBase, { headers: { 'Range': `bytes=${uItem.start}-${uItem.end}` } }),
+                        fetch(currentUrlBase, { headers: { 'Range': `bytes=${vItem.start}-${vItem.end}` } })
+                    ]);
+
+                    const uBuffer = await uRes.arrayBuffer();
+                    const vBuffer = await vRes.arrayBuffer();
+
+                    setStatus("DECODING VECTORS...");
+                    const uDecoded = processGribData(uBuffer);
+                    const vDecoded = processGribData(vBuffer);
+
+                    // Update Global State
+                    currentProductType = 'vector';
+                    currentDecodedData = { u: uDecoded, v: vDecoded };
+
+                    setStatus("RENDERING VECTOR FIELD...");
+                    renderWindsToGlobe(uDecoded, vDecoded);
+                } else {
+                    setStatus(`DOWNLOADING ${prod}...`);
+                    const item = config.items[level];
+                    
+                    const res = await fetch(currentUrlBase, { headers: { 'Range': `bytes=${item.start}-${item.end}` } });
+                    const buffer = await res.arrayBuffer();
+
+                    setStatus("DECODING SCALAR...");
+                    const decoded = processGribData(buffer);
+                    
+                    // Update Global State
+                    currentProductType = 'scalar';
+                    currentDecodedData = decoded;
+
+                    setStatus("RENDERING SCALAR HEATMAP...");
+                    renderScalarToGlobe(decoded, prod);
+                }
+
+                setStatus(`LOADED: ${prod} at ${level}`, "#00ff88");
+            } catch (err) {
+                console.error(err);
+                setStatus(`ERROR: ${err.message}`, "#ff4d4d");
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // --- Rendering Logic ---
+
+        // Helper to format values smartly based on magnitude
+        function formatLegendValue(val) {
+            if (val === 0) return "0";
+            const absVal = Math.abs(val);
+            if (absVal < 0.01) return val.toExponential(1);
+            if (absVal >= 100) return Math.round(val).toString();
+            return val.toFixed(2).replace(/\.?0+$/, ''); // Truncate trailing zeros safely
+        }
+
+        // Helper to interpolate between standard Viridis/Jet color stops
+        function getDynamicColor(val, min, max, isCloud, isSparse) {
+            let t = (max === min) ? 0 : Math.max(0, Math.min(1, (val - min) / (max - min)));
+            
+            if (isCloud) {
+                return [255, 255, 255, Math.floor(t * 220)];
+            }
+
+            // Standard Jet Colormap
+            const stops = [
+                {v: 0.0, c: [0,0,139]},
+                {v: 0.2, c: [0,0,255]},
+                {v: 0.4, c: [0,255,255]},
+                {v: 0.6, c: [0,255,0]},
+                {v: 0.8, c: [255,255,0]},
+                {v: 1.0, c: [255,0,0]}
+            ];
+            
+            let alpha = 200;
+            // If it's a sparse field (like rain/mixing ratio) and the value is at/near 0, make it transparent
+            if (isSparse && t < 0.02) {
+                alpha = 0;
+            }
+
+            for (let i = 0; i < stops.length - 1; i++) {
+                if (t >= stops[i].v && t <= stops[i+1].v) {
+                    const localT = (t - stops[i].v) / (stops[i+1].v - stops[i].v);
+                    const r = Math.round(stops[i].c[0] + localT * (stops[i+1].c[0] - stops[i].c[0]));
+                    const g = Math.round(stops[i].c[1] + localT * (stops[i+1].c[1] - stops[i].c[1]));
+                    const b = Math.round(stops[i].c[2] + localT * (stops[i+1].c[2] - stops[i].c[2]));
+                    return [r, g, b, alpha]; 
+                }
+            }
+            return [255,0,0,alpha];
+        }
+
+        function updateLegendDisplay(min, max, labelStr, isCloud, isSparse=false) {
+            const container = document.getElementById('legend-container');
+            const lbl = document.getElementById('legend-labels');
+            const grad = document.getElementById('legend');
+            
+            container.style.display = 'block';
+            document.getElementById('legend-title').innerText = labelStr;
+
+            if (isCloud) {
+                grad.style.background = 'linear-gradient(to right, transparent, rgba(255,255,255,0.8))';
+            } else if (isSparse) {
+                grad.style.background = 'linear-gradient(to right, transparent, rgb(0,0,255), rgb(0,255,255), rgb(0,255,0), rgb(255,255,0), rgb(255,0,0))';
+            } else {
+                grad.style.background = 'linear-gradient(to right, rgb(0,0,128), rgb(0,0,255), rgb(0,255,255), rgb(0,255,0), rgb(255,255,0), rgb(255,0,0))';
+            }
+
+            lbl.innerHTML = `<span>${formatLegendValue(min)}</span><span>${formatLegendValue(max)}</span>`;
+        }
+
+        function renderScalarToGlobe(data, productCode) {
+            const { nx, ny } = data.metadata.grid;
+            const isCloud = ['TCDC', 'LCDC', 'MCDC', 'HCDC', 'RH'].includes(productCode);
+            
+            // Gather valid data for statistical bounds (percentiles)
+            const validData = [];
+            for (let i = 0; i < data.values.length; i++) {
+                validData.push(data.values[i]);
+            }
+            validData.sort((a, b) => a - b);
+            
+            let min = validData[0];
+            let max = validData[validData.length - 1];
+
+            // 2nd and 98th Percentiles to robustly discard localized outliers
+            if (!isCloud && validData.length > 0) {
+                let p2 = validData[Math.floor(validData.length * 0.02)];
+                let p98 = validData[Math.floor(validData.length * 0.98)];
+                
+                // If 98% of the data has no variance (e.g. very sparse fields), fall back to absolute max
+                if (p98 - p2 < 1e-6) {
+                    p98 = max;
+                }
+                
+                min = p2;
+                max = p98;
+                
+                // Auto-clamp strictly positive physical quantities to 0
+                if (min >= 0 && min < 1e-4) min = 0;
+            }
+
+            if (min === max) max = min + 1; // Prevent div by zero
+            if (isCloud) { min = 0; max = 100; } // Force physical bounds for cloud layers
+
+            // Statistical Sparse Detection: If the median is 0, over half the planet has no data.
+            // Example: Rain, Snow, Cloud Mixing Ratios.
+            const median = validData[Math.floor(validData.length * 0.5)];
+            const isSparse = (min === 0 && median === 0 && !isCloud);
+            
+            updateLegendDisplay(min, max, `${productCode} Range`, isCloud, isSparse);
+
+            const canvas = document.createElement('canvas');
+            canvas.width = nx;
+            canvas.height = ny;
+            const ctx = canvas.getContext('2d');
+            const imageData = ctx.createImageData(nx, ny);
+
+            for (let j = 0; j < ny; j++) {
+                for (let i = 0; i < nx; i++) {
+                    const dataIdx = j * nx + i;
+                    let val = data.values[dataIdx];
+                    
+                    if (isCloud && val < 5) continue; // skip rendering trace clouds
+                    
+                    // Phase shift: GFS is 0-360, WebGL Sphere requires -180 to 180. 
+                    // Shift x-axis by nx/2.
+                    const shiftedI = (i + Math.floor(nx / 2)) % nx;
+                    const targetIdx = (j * nx + shiftedI) * 4;
+
+                    const color = getDynamicColor(val, min, max, isCloud, isSparse);
+                    imageData.data[targetIdx] = color[0];
+                    imageData.data[targetIdx + 1] = color[1];
+                    imageData.data[targetIdx + 2] = color[2];
+                    imageData.data[targetIdx + 3] = color[3];
+                }
+            }
+            ctx.putImageData(imageData, 0, 0);
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.flipY = true;
+            tex.magFilter = THREE.LinearFilter;
+            tex.minFilter = THREE.LinearFilter;
+
+            if (dataMesh) earthGroup.remove(dataMesh);
+
+            const geom = new THREE.SphereGeometry(EARTH_RADIUS + 0.4, 128, 64);
+            const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
+            dataMesh = new THREE.Mesh(geom, mat);
+            earthGroup.add(dataMesh);
+        }
+
+        function renderWindsToGlobe(uData, vData) {
+            const { nx, ny } = uData.metadata.grid;
+            
+            let maxSpd = 10;
+            const spdArray = new Float32Array(nx * ny);
+            for (let i = 0; i < nx * ny; i++) {
+                const u = uData.values[i];
+                const v = vData.values[i];
+                const spd = Math.sqrt(u*u + v*v) * 1.94384; // Convert m/s to knots
+                spdArray[i] = spd;
+                if (spd > maxSpd) maxSpd = spd;
+            }
+
+            // Cap max speed map scaling to 150kts to avoid wash-out by a single hurricane grid point
+            const plotMax = Math.min(maxSpd, 150);
+            updateLegendDisplay(0, plotMax, 'Wind Vector Speed (kts)', false, false);
+
+            const densityVal = parseInt(document.getElementById('density-slider').value);
+            const step = 11 - densityVal;
+            const resMult = parseInt(document.getElementById('res-select').value);
+
+            const cw = 3600 * resMult;
+            const ch = 1800 * resMult;
+            const canvas = document.createElement('canvas');
+            canvas.width = cw;
+            canvas.height = ch;
+            const ctx = canvas.getContext('2d');
+            ctx.lineWidth = 2.0 * resMult;
+
+            for (let j = 0; j < ny; j += step) {
+                for (let i = 0; i < nx; i += step) {
+                    const dataIdx = j * nx + i;
+                    const u = uData.values[dataIdx];
+                    const v = vData.values[dataIdx];
+                    const spd = spdArray[dataIdx];
+                    
+                    if (spd < 15) continue; // Filter light winds for cleanliness
+
+                    const cx = ((i / (nx - 1)) * cw + (cw / 2)) % cw;
+                    const cy = (j / (ny - 1)) * ch;
+
+                    const dir = (270 - Math.atan2(v, u) * (180 / Math.PI)) % 360;
+                    const angle = (dir - 90) * Math.PI / 180;
+
+                    ctx.save();
+                    ctx.translate(cx, cy);
+                    ctx.rotate(angle);
+                    
+                    // Vectors use standard color generator, no sparse logic
+                    const colorArr = getDynamicColor(spd, 0, plotMax, false, false);
+                    const barbColor = `rgb(${colorArr[0]},${colorArr[1]},${colorArr[2]})`;
+                    ctx.strokeStyle = barbColor;
+                    ctx.fillStyle = barbColor;
+
+                    const slen = 16 * resMult;
+                    ctx.beginPath();
+                    ctx.moveTo(0, 0);
+                    ctx.lineTo(slen, 0);
+                    ctx.stroke();
+
+                    let rem = Math.round(spd / 5) * 5;
+                    let off = slen;
+                    
+                    const isNorthernHemisphere = j < (ny / 2);
+                    const bAng = isNorthernHemisphere ? Math.PI * 0.75 : -Math.PI * 0.75; 
+                    const bLen = 8 * resMult;
+                    const penW = 3 * resMult;
+                    const penH = 6 * resMult;
+                    const pennantSpacing = 7 * resMult;
+                    const barbSpacing = 4 * resMult;
+
+                    while (rem >= 50) {
+                        ctx.beginPath();
+                        ctx.moveTo(off, 0);
+                        ctx.lineTo(off + Math.cos(bAng) * penW, Math.sin(bAng) * penH);
+                        ctx.lineTo(off + Math.cos(bAng) * (penW * 2), 0);
+                        ctx.fill();
+                        off -= pennantSpacing;
+                        rem -= 50;
+                    }
+                    while (rem >= 10) {
+                        ctx.beginPath();
+                        ctx.moveTo(off, 0);
+                        ctx.lineTo(off + Math.cos(bAng) * bLen, Math.sin(bAng) * bLen);
+                        ctx.stroke();
+                        off -= barbSpacing;
+                        rem -= 10;
+                    }
+                    if (rem >= 5) {
+                        ctx.beginPath();
+                        ctx.moveTo(off, 0);
+                        ctx.lineTo(off + Math.cos(bAng) * bLen * 0.5, Math.sin(bAng) * bLen * 0.5);
+                        ctx.stroke();
+                    }
+                    ctx.restore();
+                }
+            }
+
+            const barbTex = new THREE.CanvasTexture(canvas);
+            barbTex.flipY = true;
+            barbTex.magFilter = THREE.NearestFilter;
+            barbTex.minFilter = THREE.NearestFilter;
+
+            if (dataMesh) earthGroup.remove(dataMesh);
+
+            const barbGeom = new THREE.SphereGeometry(EARTH_RADIUS + 0.8, 128, 64);
+            const barbMat = new THREE.MeshBasicMaterial({ map: barbTex, transparent: true, depthWrite: false });
+            dataMesh = new THREE.Mesh(barbGeom, barbMat);
+            earthGroup.add(dataMesh);
+        }
+
+        // --- Initialization Hooks ---
+        window.addEventListener('wasmReady', () => {
+            // Setup Date Picker Defaults
+            const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            document.getElementById('date-picker').value = d.toISOString().slice(0, 10);
+            
+            // FHR Slider listener
+            document.getElementById('fhr-slider').addEventListener('input', (e) => {
+                document.getElementById('fhr-label').innerText = String(e.target.value).padStart(3, '0');
+            });
+
+            // Button Bindings
+            document.getElementById('btn-load-idx').addEventListener('click', loadNWPInventory);
+            document.getElementById('btn-load-idx').disabled = false;
+            
+            document.getElementById('btn-render').addEventListener('click', fetchAndRenderLayer);
+
+            initGlobe();
+            
+            // Update status badge immediately when WASM finishes loading
+            setStatus("WASM READY - AWAITING INVENTORY", "#00ff88");
+        });
+    </script>
+</body>
+</html>
