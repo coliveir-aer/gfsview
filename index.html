@@ -264,6 +264,10 @@
                         <option value="4">Ultra (4x)</option>
                     </select>
                 </div>
+                <div class="control-group">
+                    <label>Min Speed Cutoff <span id="min-spd-label" style="color:#aaa; font-weight:normal;">15 kts</span></label>
+                    <input type="range" id="min-spd-slider" min="0" max="60" step="1" value="15">
+                </div>
             </div>
 
             <button id="btn-render" class="btn">2. Fetch & Render Data</button>
@@ -884,6 +888,7 @@
             const densityVal = parseInt(document.getElementById('density-slider').value);
             const step = 11 - densityVal;
             const resMult = parseInt(document.getElementById('res-select').value);
+            const minSpdCutoff = parseInt(document.getElementById('min-spd-slider').value);
 
             const cw = 3600 * resMult;
             const ch = 1800 * resMult;
@@ -900,7 +905,7 @@
                     const v = vData.values[dataIdx];
                     const spd = spdArray[dataIdx];
                     
-                    if (spd < 15) continue; // Filter light winds for cleanliness
+                    if (spd < minSpdCutoff) continue; // Filter light winds dynamically
 
                     const cx = ((i / (nx - 1)) * cw + (cw / 2)) % cw;
                     const cy = (j / (ny - 1)) * ch;
@@ -984,6 +989,11 @@
             // FHR Slider listener
             document.getElementById('fhr-slider').addEventListener('input', (e) => {
                 document.getElementById('fhr-label').innerText = String(e.target.value).padStart(3, '0');
+            });
+
+            // Min Speed Slider listener
+            document.getElementById('min-spd-slider').addEventListener('input', (e) => {
+                document.getElementById('min-spd-label').innerText = `${e.target.value} kts`;
             });
 
             // Button Bindings
