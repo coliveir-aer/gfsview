@@ -237,6 +237,15 @@
         </div>
 
         <div class="control-group">
+            <label>Resolution</label>
+            <select id="resolution-select">
+                <option value="pgrb2.0p25" selected>0.25° (High)</option>
+                <option value="pgrb2.0p50">0.50° (Medium)</option>
+                <option value="pgrb2.1p00">1.00° (Low)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
             <label><span>Forecast Horizon</span><span style="color:#4db8ff">+<span id="fhr-label">006</span>h</span></label>
             <input type="range" id="fhr-slider" min="0" max="120" step="3" value="6">
         </div>
@@ -291,7 +300,6 @@
         const PLANE_WIDTH = 400;
         const PLANE_HEIGHT = 200;
         const S3_BUCKET_URL = 'https://noaa-gfs-bdp-pds.s3.amazonaws.com/';
-        const PRODUCT = "pgrb2.0p50"; // 0.50 degree matches the provided idx string context exactly
         
         let scene, camera, renderer, earthGroup, earthSphere, dataMesh;
         let isDragging = false;
@@ -525,8 +533,9 @@
             const dateInput = document.getElementById('date-picker').value.replace(/-/g, '');
             const cycle = document.getElementById('cycle-select').value;
             const fhr = String(document.getElementById('fhr-slider').value).padStart(3, '0');
+            const resolution = document.getElementById('resolution-select').value;
             
-            const fileBase = `gfs.t${cycle}z.${PRODUCT}.f${fhr}`;
+            const fileBase = `gfs.t${cycle}z.${resolution}.f${fhr}`;
             currentUrlBase = `${S3_BUCKET_URL}gfs.${dateInput}/${cycle}/atmos/${fileBase}`;
 
             try {
