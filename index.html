@@ -213,6 +213,12 @@
     <div class="ui-overlay">
         <h1>GENERIC NWP GLOBE</h1>
         <p class="description">Live Serverless Decoder (WASM)</p>
+
+        <div style="margin-bottom: 15px;">
+            <label style="font-size: 12px; color: #eee; cursor: pointer;">
+                <input type="checkbox" id="toggle-2d" style="vertical-align: middle;"> 2D Flat Map
+            </label>
+        </div>
         
         <div class="status-badge" id="status-indicator">INITIALIZING WASM...</div>
 
@@ -282,12 +288,15 @@
 
     <script>
         const EARTH_RADIUS = 100;
+        const PLANE_WIDTH = 400;
+        const PLANE_HEIGHT = 200;
         const S3_BUCKET_URL = 'https://noaa-gfs-bdp-pds.s3.amazonaws.com/';
         const PRODUCT = "pgrb2.0p50"; // 0.50 degree matches the provided idx string context exactly
         
         let scene, camera, renderer, earthGroup, earthSphere, dataMesh;
         let isDragging = false;
         let prevMouse = { x: 0, y: 0 };
+        let is2DView = localStorage.getItem('is2DView') === 'true';
 
         // Global State variables for interactive data lookups
         let currentUrlBase = "";
@@ -330,7 +339,7 @@
             earthGroup = new THREE.Group();
             scene.add(earthGroup);
 
-            const earthGeom = new THREE.SphereGeometry(EARTH_RADIUS, 128, 64);
+            const earthGeom = is2DView ? new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 128, 64) : new THREE.SphereGeometry(EARTH_RADIUS, 128, 64);
             const textureLoader = new THREE.TextureLoader();
             const earthMat = new THREE.MeshPhongMaterial({
                 color: 0xffffff,
@@ -345,8 +354,10 @@
             earthGroup.add(earthSphere);
 
             // Start oriented over North America
-            earthGroup.rotation.y = Math.PI / 1.5; 
-            earthGroup.rotation.x = Math.PI / 8;
+            if (!is2DView) {
+                earthGroup.rotation.y = Math.PI / 1.5; 
+                earthGroup.rotation.x = Math.PI / 8;
+            }
 
             setupInteraction(container);
             animate();
@@ -368,8 +379,13 @@
             window.addEventListener('mousemove', (e) => {
                 if (!isDragging) return;
                 const delta = { x: e.clientX - prevMouse.x, y: e.clientY - prevMouse.y };
-                earthGroup.rotation.y += delta.x * 0.005;
-                earthGroup.rotation.x += delta.y * 0.005;
+                if (is2DView) {
+                    earthGroup.position.x += delta.x * (camera.position.z / 500);
+                    earthGroup.position.y -= delta.y * (camera.position.z / 500);
+                } else {
+                    earthGroup.rotation.y += delta.x * 0.005;
+                    earthGroup.rotation.x += delta.y * 0.005;
+                }
                 prevMouse = { x: e.clientX, y: e.clientY };
             });
             
@@ -862,9 +878,10 @@
 
             if (dataMesh) earthGroup.remove(dataMesh);
 
-            const geom = new THREE.SphereGeometry(EARTH_RADIUS + 0.4, 128, 64);
+            const geom = is2DView ? new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 128, 64) : new THREE.SphereGeometry(EARTH_RADIUS + 0.4, 128, 64);
             const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
             dataMesh = new THREE.Mesh(geom, mat);
+            if (is2DView) dataMesh.position.z = 1;
             earthGroup.add(dataMesh);
         }
 
@@ -974,9 +991,10 @@
 
             if (dataMesh) earthGroup.remove(dataMesh);
 
-            const barbGeom = new THREE.SphereGeometry(EARTH_RADIUS + 0.8, 128, 64);
+            const barbGeom = is2DView ? new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 128, 64) : new THREE.SphereGeometry(EARTH_RADIUS + 0.8, 128, 64);
             const barbMat = new THREE.MeshBasicMaterial({ map: barbTex, transparent: true, depthWrite: false });
             dataMesh = new THREE.Mesh(barbGeom, barbMat);
+            if (is2DView) dataMesh.position.z = 1;
             earthGroup.add(dataMesh);
         }
 
@@ -1001,6 +1019,30 @@
             document.getElementById('btn-load-idx').disabled = false;
             
             document.getElementById('btn-render').addEventListener('click', fetchAndRenderLayer);
+
+            const toggle2D = document.getElementById('toggle-2d');
+            toggle2D.checked = is2DView;
+            toggle2D.addEventListener('change', (e) => {
+                is2DView = e.target.checked;
+                localStorage.setItem('is2DView', is2DView);
+
+                earthSphere.geometry.dispose();
+                earthSphere.geometry = is2DView ? new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 128, 64) : new THREE.SphereGeometry(EARTH_RADIUS, 128, 64);
+
+                if (dataMesh) {
+                    dataMesh.geometry.dispose();
+                    dataMesh.geometry = is2DView ? new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 128, 64) : (currentProductType === 'vector' ? new THREE.SphereGeometry(EARTH_RADIUS + 0.8, 128, 64) : new THREE.SphereGeometry(EARTH_RADIUS + 0.4, 128, 64));
+                    dataMesh.position.z = is2DView ? 1 : 0;
+                }
+
+                if (is2DView) {
+                    earthGroup.rotation.set(0, 0, 0);
+                } else {
+                    earthGroup.position.set(0, 0, 0);
+                    earthGroup.rotation.y = Math.PI / 1.5;
+                    earthGroup.rotation.x = Math.PI / 8;
+                }
+            });
 
             initGlobe();
             
