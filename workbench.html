@@ -1,0 +1,2095 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NetCDF Raster Sandbox (Portable)</title>
+    <!-- External Dependencies via CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- New Dependencies for 1D and 3D Rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- Configure WASM Loading for GFS -->
+    <script>
+        var Module = {
+            locateFile: (path) => {
+                if (path.endsWith('.wasm')) return 'g2clib.wasm';
+                return path;
+            }
+        };
+    </script>
+    <script src="g2clib.js"></script>
+    
+    <style>
+        html, body, #root { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif; 
+            background-color: #f0f2f5; color: #333; 
+        }
+        .main-layout { display: flex; height: 100vh; }
+        .sidebar { width: 320px; min-width: 300px; padding: 1rem; background-color: #fff; border-right: 1px solid #ddd; overflow-y: auto; box-shadow: 2px 0 5px rgba(0,0,0,0.1); z-index: 20; }
+        .content-grid { flex-grow: 1; display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 8px; padding: 8px; background-color: #e9ecef; overflow-y: auto; }
+        .view-container { display: flex; flex-direction: column; background-color: #495057; border-radius: 5px; box-shadow: 0 1px 3px rgba(0,0,0,0.2); overflow: hidden; min-height: 300px; position: relative; }
+        .view-header { background-color: #343a40; color: white; padding: 6px 12px; font-size: 0.9rem; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+        .view-header-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-right: 10px; }
+        .view-header-buttons { display: flex; gap: 5px; }
+        .view-btn { background: #6c757d; color: white; border: none; border-radius: 3px; cursor: pointer; padding: 2px 6px; font-size: 14px; line-height: 1; }
+        .view-btn:disabled { background: #495057; cursor: not-allowed; opacity: 0.5; }
+        .view-btn-close { background: #dc3545; }
+        .view-canvas-wrapper { flex-grow: 1; position: relative; overflow: hidden; }
+        
+        .loading-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0, 0, 0, 0.75); color: white; display: flex; justify-content: center; align-items: center; z-index: 2000; }
+        .loading-content { text-align: center; font-size: 1.2rem; padding: 2rem; background: rgba(0,0,0,0.5); border-radius: 8px; min-width: 250px; }
+        .progress-bar-container { margin-top: 1rem; width: 100%; height: 20px; background-color: #555; border-radius: 5px; border: 1px solid #777; overflow: hidden; }
+        .progress-bar { width: 0%; height: 100%; background-color: #28a745; text-align: center; line-height: 20px; color: white; font-weight: bold; font-size: 12px; transition: width 0.2s ease-out; }
+        
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background-color: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 3000; }
+        .modal-content { background-color: white; padding: 1.5rem; border-radius: 8px; width: 600px; max-height: 85vh; overflow-y: auto; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+        .modal-content-large { width: 90%; max-width: 1200px; }
+        
+        .metadata-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin-top: 5px; }
+        .metadata-table th, .metadata-table td { padding: 8px; border: 1px solid #ddd; text-align: left; word-break: break-word; }
+        .metadata-table tr:nth-child(even) { background-color: #f9f9f9; }
+        .metadata-key { font-weight: bold; color: #555; width: 35%; }
+        .info-icon { cursor: pointer; opacity: 0.6; margin-left: 8px; font-size: 1.1em; vertical-align: middle; transition: opacity 0.2s; }
+        .info-icon:hover { opacity: 1; color: #007bff; }
+        
+        .notification-container { position: fixed; bottom: 20px; right: 20px; z-index: 4000; display: flex; flex-direction: column; gap: 10px; }
+        .notification-toast { display: flex; justify-content: space-between; align-items: center; padding: 12px 18px; border-radius: 5px; color: #fff; box-shadow: 0 3px 10px rgba(0,0,0,0.2); min-width: 250px; }
+        .notification-info { background-color: #2f96b4; }
+        .notification-success { background-color: #51a351; }
+        .notification-error { background-color: #bd362f; }
+        
+        .attribution-footer { padding: 4px; text-align: center; background: #e9ecef; border-top: 1px solid #ddd; }
+        .attribution-text { background: rgba(255,255,255,0.8); padding: 5px 10px; border-radius: 3px; font-size: 10px; color: #333; box-shadow: 0 1px 3px rgba(0,0,0,0.15); display: inline-block; }
+
+        /* Dashboard specific styles */
+        .dash-grid { display: flex; overflow-x: auto; border: 1px solid #e2e8f0; background: #f8fafc; padding-bottom: 5px; }
+        .dash-col { flex: 0 0 auto; display: flex; flex-direction: column; min-width: 45px; border-right: 1px solid #e2e8f0; }
+        .dash-header { background: #334155; color: white; padding: 4px; text-align: center; font-size: 11px; font-weight: bold; }
+        .dash-slots { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px; justify-content: flex-start; align-content: flex-start; min-height: 60px; }
+        .dash-slot { width: 12px; height: 12px; border-radius: 1px; cursor: pointer; transition: transform 0.1s; }
+        .dash-slot:hover { transform: scale(1.3); z-index: 10; box-shadow: 0 0 4px rgba(0,0,0,0.3); }
+        .slot-idle { background-color: #cbd5e1; }
+        .slot-scanning { background-color: #eab308; animation: pulse 1s infinite; }
+        .slot-exists { background-color: #22c55e; }
+        .slot-missing { background-color: #ef4444; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import * as Comlink from 'https://esm.sh/comlink@4.4.1';
+        import * as h5wasm from 'https://esm.sh/h5wasm@0.8.1';
+        import * as topojson from 'https://esm.sh/topojson-client@3.1.0';
+
+        const { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } = React;
+
+        // --- LOGGER ---
+        const LOG_LEVEL = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+        const CURRENT_LOG_LEVEL = LOG_LEVEL.DEBUG;
+        const log = (level, context, ...args) => {
+            if (level < CURRENT_LOG_LEVEL) return;
+            const time = new Date().toLocaleTimeString();
+            const prefix = `%c[${time}] [${context}]`;
+            let style = 'color: white; border-radius: 3px; padding: 2px 4px;';
+            switch (level) {
+                case LOG_LEVEL.DEBUG: style += 'background-color: #6c757d;'; console.debug(prefix, style, ...args); break;
+                case LOG_LEVEL.INFO: style += 'background-color: #007bff;'; console.info(prefix, style, ...args); break;
+                case LOG_LEVEL.WARN: style += 'background-color: #ffc107; color: black;'; console.warn(prefix, style, ...args); break;
+                case LOG_LEVEL.ERROR: style += 'background-color: #dc3545;'; console.error(prefix, style, ...args); break;
+                default: console.log(prefix, style, ...args);
+            }
+        };
+        const createLogger = (context) => ({
+            debug: (...args) => log(LOG_LEVEL.DEBUG, context, ...args),
+            info: (...args) => log(LOG_LEVEL.INFO, context, ...args),
+            warn: (...args) => log(LOG_LEVEL.WARN, context, ...args),
+            error: (...args) => log(LOG_LEVEL.ERROR, context, ...args),
+        });
+
+        const appLogger = createLogger('App');
+        const uploaderLogger = createLogger('Uploader');
+        const mainLogger = createLogger('Portable');
+
+        mainLogger.info("Starting execution. (Optimized React Active)");
+
+        // --- GEOSPATIAL LOGIC (RAW WORKER STRING) ---
+        const workerCode = `
+            importScripts('https://unpkg.com/comlink/dist/umd/comlink.js');
+            
+            const calculateLatLon = (dataset) => {
+                const globalAttrs = dataset.globalAttributes;
+                const vars = dataset.variables;
+                
+                const r_eq = parseFloat(globalAttrs.semi_major_axis);
+                const r_pol = parseFloat(globalAttrs.semi_minor_axis);
+                const H = parseFloat(globalAttrs.perspective_point_height) + r_eq;
+                const lon_0 = parseFloat(globalAttrs.longitude_of_projection_origin) * (Math.PI / 180);
+                
+                const y_data = vars.y.data;
+                const x_data = vars.x.data;
+                
+                const r_eq_sq = r_eq * r_eq;
+                const r_pol_sq = r_pol * r_pol;
+                const lats = new Float32Array(y_data.length * x_data.length);
+                const lons = new Float32Array(y_data.length * x_data.length);
+                
+                let i = 0;
+                for (let j = 0; j < y_data.length; j++) {
+                    const y_i = y_data[j];
+                    const sin_y = Math.sin(y_i); 
+                    const cos_y = Math.cos(y_i);
+                    for (let k = 0; k < x_data.length; k++) {
+                        const x_i = x_data[k];
+                        const sin_x = Math.sin(x_i); 
+                        const cos_x = Math.cos(x_i);
+                        const a = sin_x * sin_x + cos_x * cos_x * (cos_y * cos_y + (r_eq_sq / r_pol_sq) * sin_y * sin_y);
+                        const b = -2 * H * cos_x * cos_y;
+                        const c = (H * H) - r_eq_sq;
+                        const r_s_sqrt = b * b - 4 * a * c;
+                        
+                        if (r_s_sqrt < 0) { 
+                            lats[i] = NaN; 
+                            lons[i] = NaN; 
+                        } else {
+                            const r_s = (-b - Math.sqrt(r_s_sqrt)) / (2 * a);
+                            const S_x = r_s * cos_x * cos_y; 
+                            const S_y = -r_s * sin_x; 
+                            const S_z = r_s * cos_x * sin_y;
+                            lats[i] = Math.atan((r_eq_sq / r_pol_sq) * (S_z / Math.sqrt(Math.pow(H - S_x, 2) + Math.pow(S_y, 2)))) * (180 / Math.PI);
+                            lons[i] = (lon_0 - Math.atan2(S_y, H - S_x)) * (180 / Math.PI);
+                        }
+                        i++;
+                    }
+                }
+                return { lats, lons };
+            };
+
+            const geoService = {
+                process: async (dataset) => {
+                    const { lats, lons } = calculateLatLon(dataset);
+                    return Comlink.transfer({ lats, lons }, [lats.buffer, lons.buffer]);
+                }
+            };
+            Comlink.expose(geoService);
+        `;
+        
+        const workerBlob = new Blob([workerCode], { type: 'text/javascript' });
+        const workerUrl = URL.createObjectURL(workerBlob);
+        const geoWorker = new Worker(workerUrl);
+        const geoService = Comlink.wrap(geoWorker);
+
+        // --- SCIENCE ALGORITHM LOGIC (RAW WORKER STRING) ---
+        const scienceWorkerCode = `
+            importScripts('https://unpkg.com/comlink/dist/umd/comlink.js');
+            const normalize = (v, min, max) => Math.max(0, Math.min(1, (v - min) / (max - min)));
+            const recipes = {
+                ndvi: (arrays) => {
+                    const nir = arrays['Ch03']; const red = arrays['Ch02'];
+                    if (!nir || !red) return null;
+                    const out = new Float32Array(nir.length);
+                    let min = Infinity, max = -Infinity;
+                    for(let i=0; i<nir.length; i++) {
+                        const val = (nir[i] - red[i]) / (nir[i] + red[i]);
+                        out[i] = val;
+                        if (!isNaN(val)) { if (val<min) min=val; if(val>max) max=val; }
+                    }
+                    return { values: out, isRGB: false, domain: {min, max} };
+                },
+                dust: (arrays) => {
+                    const ch15 = arrays['Ch15']; const ch13 = arrays['Ch13']; const ch14 = arrays['Ch14']; const ch11 = arrays['Ch11'];
+                    if (!ch15 || !ch13 || !ch14 || !ch11) return null;
+                    const out = new Uint8ClampedArray(ch15.length * 4);
+                    for(let i=0; i<ch15.length; i++) {
+                        const r = normalize(ch15[i] - ch13[i], -6.7, 2.6);
+                        const g = normalize(ch14[i] - ch11[i], -0.5, 20.0);
+                        const b = normalize(ch13[i], 261.2, 288.7);
+                        let gamma_g = Math.pow(g, 1/2.5);
+                        out[i*4] = r * 255; out[i*4+1] = gamma_g * 255; out[i*4+2] = b * 255; out[i*4+3] = 255;
+                    }
+                    return { values: out, isRGB: true };
+                },
+                geocolor: (arrays) => {
+                    const ch01 = arrays['Ch01']; const ch02 = arrays['Ch02']; const ch03 = arrays['Ch03'];
+                    if (!ch01 || !ch02 || !ch03) return null;
+                    const out = new Uint8ClampedArray(ch01.length * 4);
+                    for(let i=0; i<ch01.length; i++) {
+                        const r = normalize(ch02[i], 0, 1.5);
+                        const g = normalize(0.45 * ch02[i] + 0.45 * ch01[i] + 0.1 * ch03[i], 0, 1.5);
+                        const b = normalize(ch01[i], 0, 1.5);
+                        out[i*4] = r*255; out[i*4+1] = g*255; out[i*4+2] = b*255; out[i*4+3] = 255;
+                    }
+                    return { values: out, isRGB: true };
+                }
+            };
+            const scienceService = {
+                compute: async (recipe, arrays) => {
+                    if (!recipes[recipe]) return null;
+                    const result = recipes[recipe](arrays);
+                    if (!result) return null;
+                    return Comlink.transfer(result, [result.values.buffer]);
+                }
+            };
+            Comlink.expose(scienceService);
+        `;
+        const scienceWorkerBlob = new Blob([scienceWorkerCode], { type: 'text/javascript' });
+        const scienceWorker = new Worker(URL.createObjectURL(scienceWorkerBlob));
+        const scienceService = Comlink.wrap(scienceWorker);
+
+        // --- SPATIAL INDEXING ---
+
+        function createSpatialIndex(lats, lons, dims) {
+            if (!lats || !lons) return null;
+            const [h, w] = dims;
+            const domain = { minLat: Infinity, maxLat: -Infinity, minLon: Infinity, maxLon: -Infinity };
+            for(let i=0; i<lats.length; i++) {
+                if (isNaN(lats[i])) continue;
+                if (lats[i] < domain.minLat) domain.minLat = lats[i];
+                if (lats[i] > domain.maxLat) domain.maxLat = lats[i];
+                if (lons[i] < domain.minLon) domain.minLon = lons[i];
+                if (lons[i] > domain.maxLon) domain.maxLon = lons[i];
+            }
+            const gridDivs = 100;
+            const latStep = (domain.maxLat - domain.minLat) / gridDivs;
+            const lonStep = (domain.maxLon - domain.minLon) / gridDivs;
+            const grid = Array(gridDivs * gridDivs).fill(null).map(() => []);
+            for (let i = 0; i < lats.length; i++) {
+                if (isNaN(lats[i])) continue;
+                const gy = Math.floor((lats[i] - domain.minLat) / latStep);
+                const gx = Math.floor((lons[i] - domain.minLon) / lonStep);
+                const idx = Math.max(0, Math.min(grid.length - 1, Math.floor(gy * gridDivs + gx)));
+                grid[idx].push(i);
+            }
+            return { grid, domain, gridDivs, latStep, lonStep, lats, lons, width: w };
+        }
+
+        function findClosestPixel(lat, lon, index) {
+            if (!index || lat < index.domain.minLat || lat > index.domain.maxLat || lon < index.domain.minLon || lon > index.domain.maxLon) return null;
+            const gy = Math.floor((lat - index.domain.minLat) / index.latStep);
+            const gx = Math.floor((lon - index.domain.minLon) / index.lonStep);
+            const gIdx = Math.max(0, Math.min(index.grid.length - 1, Math.floor(gy * index.gridDivs + gx)));
+            const points = index.grid[gIdx];
+            if (!points || points.length === 0) return null;
+            let best = -1, minDist = Infinity;
+            for (let i = 0; i < points.length; i++) {
+                const p = points[i];
+                const d = Math.pow(lat - index.lats[p], 2) + Math.pow(lon - index.lons[p], 2);
+                if (d < minDist) { minDist = d; best = p; }
+            }
+            if (Math.sqrt(minDist) > Math.sqrt(Math.pow(index.latStep,2) + Math.pow(index.lonStep,2)) * 2) return null;
+            return { x: best % index.width, y: Math.floor(best / index.width) };
+        }
+
+        // --- COLORIZER ---
+
+        const colormapDefs = {
+            viridis: [[68, 1, 84], [72, 40, 120], [62, 74, 137], [49, 104, 142], [38, 130, 142], [31, 158, 137], [53, 183, 121], [109, 205, 89], [180, 222, 44], [253, 231, 37]],
+            jet: [[0, 0, 131], [0, 60, 170], [5, 255, 255], [255, 255, 0], [250, 100, 0], [240, 0, 0], [130, 0, 0]],
+            rainbow: [[150, 0, 90], [0, 0, 200], [0, 255, 0], [255, 255, 0], [255, 127, 0], [255, 0, 0]]
+        };
+
+        const colorMaps = {
+            grayscale: (v, min, max) => {
+                if (isNaN(v)) return [0, 0, 0, 0];
+                if (min === max) return [128, 128, 128, 255];
+                const val = Math.round(((v - min) / (max - min)) * 255);
+                return [val, val, val, 255];
+            },
+            grayscale_r: (v, min, max) => {
+                if (isNaN(v)) return [0, 0, 0, 0];
+                if (min === max) return [128, 128, 128, 255];
+                const val = 255 - Math.round(((v - min) / (max - min)) * 255);
+                return [val, val, val, 255];
+            }
+        };
+        Object.keys(colormapDefs).forEach(name => {
+            const colors = colormapDefs[name];
+            const mapper = (v, min, max, pool) => {
+                if (isNaN(v)) return [0, 0, 0, 0];
+                if (min === max) return [...pool[0], 255];
+                const norm = Math.max(0, Math.min(1, (v - min) / (max - min)));
+                const idx = norm * (pool.length - 1);
+                const i1 = Math.floor(idx), i2 = Math.ceil(idx), t = idx - i1;
+                const r = pool[i1][0] + t * (pool[i2][0] - pool[i1][0]);
+                const g = pool[i1][1] + t * (pool[i2][1] - pool[i1][1]);
+                const b = pool[i1][2] + t * (pool[i2][2] - pool[i1][2]);
+                return [r, g, b, 255];
+            };
+            colorMaps[name] = (v, min, max) => mapper(v, min, max, colors);
+            colorMaps[`${name}_r`] = (v, min, max) => mapper(v, min, max, [...colors].reverse());
+        });
+
+        // --- DATA HELPERS & PDF METADATA LOGIC ---
+
+        const extractAttributes = (item) => {
+            const obj = {};
+            if (item && item.attrs) {
+                for (let k in item.attrs) {
+                    obj[k] = item.attrs[k].value;
+                }
+            }
+            return obj;
+        };
+
+        const formatAttrValue = (val) => {
+            if (val === null || val === undefined) return 'N/A';
+            if (val.join) return `[${Array.from(val).join(', ')}]`;
+            if (typeof val === 'object') return JSON.stringify(val);
+            return String(val);
+        };
+
+        const findVar = (h5, group, name) => {
+            const keys = Array.from(group.keys());
+            if (keys.includes(name)) {
+                const item = group.get(name);
+                if (!(item instanceof h5.Group)) return item;
+            }
+            for (let k of keys) {
+                const item = group.get(k);
+                if (item instanceof h5.Group) {
+                    const found = findVar(h5, item, name);
+                    if (found) return found;
+                }
+            }
+            return null;
+        };
+
+        const getDomain = (arr) => {
+            let min = Infinity, max = -Infinity;
+            for (let i = 0; i < arr.length; i++) {
+                const v = arr[i];
+                if (!isNaN(v)) { if (v < min) min = v; if (v > max) max = v; }
+            }
+            return { min, max };
+        };
+
+        const unpack = (v, fill) => {
+            const raw = v.value;
+            const attrs = extractAttributes(v);
+            const scale = attrs.scale_factor ? attrs.scale_factor[0] : 1.0;
+            const offset = attrs.add_offset ? attrs.add_offset[0] : 0.0;
+            const fv = fill && attrs._FillValue ? attrs._FillValue[0] : null;
+            const out = new Float32Array(raw.length);
+            for(let i=0; i<raw.length; i++) out[i] = (fill && raw[i] === fv) ? NaN : (raw[i] * scale) + offset;
+            return out;
+        };
+
+        // --- CONTEXTS ---
+
+        const NotificationContext = createContext();
+        const useNotifier = () => useContext(NotificationContext);
+        const NotificationProvider = ({ children }) => {
+            const [notifications, setNotifications] = useState([]);
+            const remove = useCallback(id => setNotifications(prev => prev.filter(n => n.id !== id)), []);
+            const add = (message, type = 'info') => {
+                const id = Date.now() + Math.random();
+                setNotifications(prev => [...prev, { id, message, type }]);
+                if (type !== 'error') setTimeout(() => remove(id), 5000);
+            };
+            const api = useMemo(() => ({ info: m => add(m, 'info'), success: m => add(m, 'success'), error: m => add(m, 'error') }), []);
+            return (
+                <NotificationContext.Provider value={api}>
+                    {children}
+                    <div className="notification-container">
+                        {notifications.map(n => (
+                            <div key={n.id} className={`notification-toast notification-${n.type}`}>
+                                <span style={{marginRight: '15px'}}>{n.message}</span>
+                                <button style={{background:'none',border:'none',color:'white',cursor:'pointer',fontSize:'20px'}} onClick={() => remove(n.id)}>&times;</button>
+                            </div>
+                        ))}
+                    </div>
+                </NotificationContext.Provider>
+            );
+        };
+
+        // --- COMPONENTS ---
+
+        function Uploader({ onNcFileLoaded, onConfigLoaded }) {
+            const handleFile = (file) => {
+                if (!file) return;
+                uploaderLogger.info(`handleFile triggered for: ${file.name}`);
+                const ext = file.name.split('.').pop().toLowerCase();
+                const reader = new FileReader();
+                reader.onerror = (e) => {
+                    uploaderLogger.error('FileReader error:', e);
+                };
+                if (ext === 'json') {
+                    reader.onload = (e) => onConfigLoaded(JSON.parse(e.target.result));
+                    reader.readAsText(file);
+                } else {
+                    reader.onload = (e) => {
+                        uploaderLogger.info('File read successfully. Calling onNcFileLoaded.');
+                        onNcFileLoaded(e.target.result, file.name);
+                    };
+                    reader.readAsArrayBuffer(file);
+                }
+            };
+            return (
+                <div style={{border:'2px dashed #ccc', padding:'1.5rem', textAlign:'center', cursor:'pointer', backgroundColor: '#f8fafc'}} onClick={() => document.getElementById('file-input').click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault(); handleFile(e.dataTransfer.files[0])}}>
+                    <input type="file" id="file-input" style={{display:'none'}} onChange={e => handleFile(e.target.files[0])} accept=".nc,.json" />
+                    <p style={{fontSize: '0.9rem', margin: 0}}>Drag & drop data (.nc) or config (.json) file here, or click to select.</p>
+                </div>
+            );
+        }
+
+        // --- DASHBOARD MODAL COMPONENT ---
+        const GOES_PRODUCTS = [
+            { code: "ABI-L1b-Rad", name: "ABI L1b Radiance" },
+            { code: "ABI-L2-ACHA", name: "ABI L2 Cloud Top Height" },
+            { code: "ABI-L2-ACHA2KM", name: "ABI L2 2km Cloud Height" },
+            { code: "ABI-L2-ACHP2KM", name: "ABI L2 2km Cloud Pressure" },
+            { code: "ABI-L2-ACHT", name: "ABI L2 Cloud Top Temperature" },
+            { code: "ABI-L2-ACM", name: "ABI L2 Cloud Mask" },
+            { code: "ABI-L2-ACTP", name: "ABI L2 Cloud Top Phase" },
+            { code: "ABI-L2-ADP", name: "ABI L2 Aerosol Detection" },
+            { code: "ABI-L2-AICE", name: "ABI L2 Ice Conc & Extent" },
+            { code: "ABI-L2-AITA", name: "ABI L2 Ice Thickness & Age" },
+            { code: "ABI-L2-AOD", name: "ABI L2 Aerosol Optical Depth" },
+            { code: "ABI-L2-BRF", name: "ABI L2 Bidirectional Reflectance" },
+            { code: "ABI-L2-CCLC", name: "ABI L2 Clear Sky Confidence" },
+            { code: "ABI-L2-CMIP", name: "ABI L2 Cloud & Moisture Imagery" },
+            { code: "ABI-L2-COD", name: "ABI L2 Cloud Optical Depth" },
+            { code: "ABI-L2-COD2KM", name: "ABI L2 Cloud Optical Depth 2KM" },
+            { code: "ABI-L2-CPS", name: "ABI L2 Cloud Particle Size" },
+            { code: "ABI-L2-CTP", name: "ABI L2 Cloud Top Pressure" },
+            { code: "ABI-L2-DMW", name: "ABI L2 Derived Motion Winds" },
+            { code: "ABI-L2-DMWV", name: "ABI L2 Derived Motion Wind Vectors" },
+            { code: "ABI-L2-DSI", name: "ABI L2 Derived Stability Indices" },
+            { code: "ABI-L2-DSR", name: "ABI L2 Downward Shortwave Radiation" },
+            { code: "ABI-L2-FDC", name: "ABI L2 Fire/Hot Spot" },
+            { code: "ABI-L2-FSC", name: "ABI L2 Fractional Snow Cover" },
+            { code: "ABI-L2-LSA", name: "ABI L2 Land Surface Albedo" },
+            { code: "ABI-L2-LST", name: "ABI L2 Land Surface Temperature" },
+            { code: "ABI-L2-LST2KM", name: "ABI L2 Land Surface Temperature 2KM" },
+            { code: "ABI-L2-LVMP", name: "ABI L2 Legacy Vertical Moisture Profile" },
+            { code: "ABI-L2-LVTP", name: "ABI L2 Legacy Temp Profile" },
+            { code: "ABI-L2-MCMIP", name: "ABI L2 Imagery 16 Channel" },
+            { code: "ABI-L2-PAR", name: "ABI L2 Photosynthetically Active Radiation" },
+            { code: "ABI-L2-RRQPE", name: "ABI L2 Rainfall Rate QPE" },
+            { code: "ABI-L2-RSR", name: "ABI L2 Reflected Shortwave Radiation Top-of-Atmosphere" },
+            { code: "ABI-L2-SST", name: "ABI L2 Sea Surface Temperature" },
+            { code: "ABI-L2-TPW", name: "ABI L2 Total Precipitable Water" },
+            { code: "EXIS-L1b-SFEU", name: "EXIS L1b Solar Flux EUV" },
+            { code: "EXIS-L1b-SFXR", name: "EXIS L1b Solar Flux X-Ray" },
+            { code: "GLM-L2-LCFA", name: "GLM L2 Lightning" },
+            { code: "MAG-L1b-GEOF", name: "MAG L1b Geomagnetic Field" },
+            { code: "SEIS-L1b-EHIS", name: "SEIS L1b Energetic Heavy Ion Sensor" },
+            { code: "SEIS-L1b-MPSH", name: "SEIS L1b Magnetospheric Particle Sensor High" },
+            { code: "SEIS-L1b-MPSL", name: "SEIS L1b Magnetospheric Particle Sensor Low" },
+            { code: "SEIS-L1b-SGPS", name: "SEIS L1b Solar and Galactic Proton Sensor" },
+            { code: "SUVI-L1b-Fe093", name: "SUVI L1b Fe093" },
+            { code: "SUVI-L1b-Fe131", name: "SUVI L1b Fe131" },
+            { code: "SUVI-L1b-Fe171", name: "SUVI L1b Fe171" },
+            { code: "SUVI-L1b-Fe195", name: "SUVI L1b Fe195" },
+            { code: "SUVI-L1b-Fe284", name: "SUVI L1b Fe284" },
+            { code: "SUVI-L1b-He303", name: "SUVI L1b He303" }
+        ];
+
+        function GoesDashboardModal({ isOpen, onClose, onSelectFile }) {
+            const notifier = useNotifier();
+            if (!isOpen) return null;
+
+            const [satellite, setSatellite] = useState('noaa-goes19');
+            const [date, setDate] = useState(() => new Date().toISOString().split('T')[0]);
+            const [product, setProduct] = useState('ABI-L2-CMIP');
+            const [domain, setDomain] = useState('C');
+            const [channel, setChannel] = useState('02');
+            const [clickAction, setClickAction] = useState('load'); // 'load', 'download', 'https', 's3'
+            
+            // Results is an array of 24 hours. Each hour is an array of slots.
+            const [results, setResults] = useState(Array(24).fill(null));
+            const [scanStatus, setScanStatus] = useState(Array(24).fill('idle'));
+
+            const domainConfig = { 'F': 6, 'C': 12, 'M1': 60, 'M2': 60 };
+            const slotsPerHour = domainConfig[domain];
+            const needsChannel = ["ABI-L1b-Rad", "ABI-L2-CMIP", "ABI-L2-DMW", "ABI-L2-DMWV"].includes(product);
+
+            const handleScan = async () => {
+                const emptyResults = Array(24).fill(null).map(() => Array(slotsPerHour).fill(null));
+                setResults(emptyResults);
+                setScanStatus(Array(24).fill('scanning'));
+
+                const dateObj = new Date(date);
+                const year = dateObj.getUTCFullYear();
+                const start = new Date(Date.UTC(year, 0, 1));
+                const doy = Math.floor((dateObj - start) / (1000 * 60 * 60 * 24)) + 1;
+                const doyPadded = String(doy).padStart(3, '0');
+
+                let productPathPrefix = product;
+                if (product.startsWith('ABI-L')) {
+                    if (domain === 'F') productPathPrefix += 'F';
+                    else if (domain === 'C') productPathPrefix += 'C';
+                    else productPathPrefix += 'M';
+                }
+
+                const scanHour = async (h) => {
+                    const hourPadded = String(h).padStart(2, '0');
+                    const fullPrefix = `${productPathPrefix}/${year}/${doyPadded}/${hourPadded}/`;
+                    const url = `https://${satellite}.s3.amazonaws.com/?list-type=2&prefix=${fullPrefix}`;
+                    
+                    try {
+                        const response = await fetch(url);
+                        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                        const text = await response.text();
+                        const parser = new DOMParser();
+                        const xml = parser.parseFromString(text, "application/xml");
+                        const keys = Array.from(xml.getElementsByTagName('Key')).map(n => n.textContent);
+                        
+                        const hourSlots = Array(slotsPerHour).fill(null);
+                        keys.forEach(key => {
+                            const filename = key.split('/').pop();
+                            
+                            // Channel filtering
+                            if (needsChannel && !filename.includes(`C${channel}_`)) return;
+
+                            // Domain-specific filtering
+                            if (domain.startsWith('M')) {
+                                if (!filename.includes(`${product}-${domain}-`)) return;
+                            }
+
+                            const match = filename.match(/_s(\d{4})(\d{3})(\d{2})(\d{2})(\d{2})/);
+                            if (match) {
+                                const min = parseInt(match[4], 10);
+                                let idx = -1;
+                                if (domain === 'F') idx = Math.floor(min / 10);
+                                else if (domain === 'C') idx = Math.floor(min / 5);
+                                else idx = min;
+                                
+                                if (idx >= 0 && idx < slotsPerHour) {
+                                    hourSlots[idx] = { key, filename };
+                                }
+                            }
+                        });
+                        
+                        setResults(prev => {
+                            const next = [...prev];
+                            next[h] = hourSlots;
+                            return next;
+                        });
+                        setScanStatus(prev => {
+                            const next = [...prev];
+                            next[h] = 'done';
+                            return next;
+                        });
+                    } catch (e) {
+                        setScanStatus(prev => {
+                            const next = [...prev];
+                            next[h] = 'error';
+                            return next;
+                        });
+                    }
+                };
+
+                // Run all 24 hours in parallel for maximum speed
+                await Promise.all(Array.from({length: 24}, (_, i) => scanHour(i)));
+            };
+
+            const handleSlotClick = (slot) => {
+                if (!slot) return;
+                const httpsUri = `https://${satellite}.s3.amazonaws.com/${slot.key}`;
+                const s3Uri = `s3://${satellite}/${slot.key}`;
+
+                if (clickAction === 'load') {
+                    onSelectFile(httpsUri, slot.filename);
+                } else if (clickAction === 'download') {
+                    const link = document.createElement('a');
+                    link.href = httpsUri;
+                    link.target = '_blank';
+                    link.download = slot.filename;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    notifier.success("File download initiated!");
+                } else if (clickAction === 'https') {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = httpsUri;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    notifier.success("HTTPS link copied to clipboard!");
+                } else if (clickAction === 's3') {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = s3Uri;
+                    document.body.appendChild(textArea);
+                    textArea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    notifier.success("S3 URI copied to clipboard!");
+                }
+            };
+
+            return (
+                <div className="modal-overlay" onClick={onClose}>
+                    <div className="modal-content modal-content-large" onClick={e => e.stopPropagation()}>
+                        <div style={{display:'flex', justifyContent:'space-between', borderBottom:'1px solid #ddd', paddingBottom:'10px', marginBottom: '15px'}}>
+                            <h3 style={{margin:0, color: '#1e293b'}}>NOAA GOES S3 Explorer</h3>
+                            <button onClick={onClose} style={{border:'none',background:'none',fontSize:'24px',cursor:'pointer',lineHeight:1}}>&times;</button>
+                        </div>
+                        
+                        <div style={{display: 'flex', gap: '15px', alignItems: 'flex-end', marginBottom: '20px', flexWrap: 'wrap'}}>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Satellite</label>
+                                <select value={satellite} onChange={e => setSatellite(e.target.value)} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px'}}>
+                                    <option value="noaa-goes19">GOES-19 (East)</option>
+                                    <option value="noaa-goes18">GOES-18 (West)</option>
+                                    <option value="noaa-goes17">GOES-17</option>
+                                    <option value="noaa-goes16">GOES-16</option>
+                                </select>
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Date (UTC)</label>
+                                <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{padding: '5px', border: '1px solid #ccc', borderRadius: '4px'}} />
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Product</label>
+                                <select value={product} onChange={e => { setProduct(e.target.value); setScanStatus(Array(24).fill('idle')); }} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px'}}>
+                                    {GOES_PRODUCTS.map(p => <option key={p.code} value={p.code}>{p.code} ({p.name})</option>)}
+                                </select>
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Domain</label>
+                                <select disabled={!product.startsWith('ABI-L')} value={domain} onChange={e => { setDomain(e.target.value); setScanStatus(Array(24).fill('idle')); }} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px', opacity: product.startsWith('ABI-L') ? 1 : 0.5}}>
+                                    <option value="F">Full Disk (10 min)</option>
+                                    <option value="C">CONUS (5 min)</option>
+                                    <option value="M1">Meso 1 (1 min)</option>
+                                    <option value="M2">Meso 2 (1 min)</option>
+                                </select>
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Channel</label>
+                                <select disabled={!needsChannel} value={channel} onChange={e => { setChannel(e.target.value); setScanStatus(Array(24).fill('idle')); }} style={{padding: '6px', border: '1px solid #ccc', borderRadius: '4px', opacity: needsChannel ? 1 : 0.5}}>
+                                    {Array.from({length: 16}, (_, i) => String(i + 1).padStart(2, '0')).map(c => <option key={c} value={c}>Ch {c}</option>)}
+                                </select>
+                            </div>
+                            <div style={{display: 'flex', flexDirection: 'column', marginTop: '10px'}}>
+                                <label style={{fontSize: '12px', fontWeight: 'bold', marginBottom: '4px'}}>Click Action</label>
+                                <div style={{display: 'flex', border: '1px solid #ccc', borderRadius: '4px', overflow: 'hidden', fontSize: '11px'}}>
+                                    <label style={{backgroundColor: clickAction === 'load' ? '#e2e8f0' : '#f8fafc', padding: '6px 10px', cursor: 'pointer', borderRight: '1px solid #ccc', display: 'flex', alignItems: 'center'}}>
+                                        <input type="radio" value="load" checked={clickAction === 'load'} onChange={e => setClickAction(e.target.value)} style={{marginRight: '4px'}} /> Load in Viewer
+                                    </label>
+                                    <label style={{backgroundColor: clickAction === 'download' ? '#e2e8f0' : '#f8fafc', padding: '6px 10px', cursor: 'pointer', borderRight: '1px solid #ccc', display: 'flex', alignItems: 'center'}}>
+                                        <input type="radio" value="download" checked={clickAction === 'download'} onChange={e => setClickAction(e.target.value)} style={{marginRight: '4px'}} /> Download
+                                    </label>
+                                    <label style={{backgroundColor: clickAction === 'https' ? '#e2e8f0' : '#f8fafc', padding: '6px 10px', cursor: 'pointer', borderRight: '1px solid #ccc', display: 'flex', alignItems: 'center'}}>
+                                        <input type="radio" value="https" checked={clickAction === 'https'} onChange={e => setClickAction(e.target.value)} style={{marginRight: '4px'}} /> Copy HTTPS
+                                    </label>
+                                    <label style={{backgroundColor: clickAction === 's3' ? '#e2e8f0' : '#f8fafc', padding: '6px 10px', cursor: 'pointer', display: 'flex', alignItems: 'center'}}>
+                                        <input type="radio" value="s3" checked={clickAction === 's3'} onChange={e => setClickAction(e.target.value)} style={{marginRight: '4px'}} /> Copy S3 URI
+                                    </label>
+                                </div>
+                            </div>
+                            <button onClick={handleScan} style={{backgroundColor: '#2563eb', color: 'white', border: 'none', padding: '7px 16px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer', marginLeft: 'auto', alignSelf: 'flex-end'}}>
+                                Scan S3 Bucket
+                            </button>
+                        </div>
+
+                        <div style={{fontSize: '12px', display: 'flex', gap: '15px', marginBottom: '10px', justifyContent: 'flex-end', fontWeight: 'bold', color: '#64748b'}}>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}><div className="dash-slot slot-idle"></div> Pending</div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}><div className="dash-slot slot-scanning"></div> Scanning</div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}><div className="dash-slot slot-exists"></div> Available (Click applies action)</div>
+                            <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}><div className="dash-slot slot-missing"></div> Missing</div>
+                        </div>
+
+                        <div className="dash-grid">
+                            {Array.from({length: 24}).map((_, h) => (
+                                <div key={h} className="dash-col">
+                                    <div className="dash-header">{String(h).padStart(2, '0')}z</div>
+                                    <div className="dash-slots">
+                                        {Array.from({length: slotsPerHour}).map((_, s) => {
+                                            const status = scanStatus[h];
+                                            const slotData = results[h] ? results[h][s] : null;
+                                            
+                                            let slotClass = 'slot-idle';
+                                            if (status === 'scanning') slotClass = 'slot-scanning';
+                                            else if (status === 'done' || status === 'error') {
+                                                slotClass = slotData ? 'slot-exists' : 'slot-missing';
+                                            }
+
+                                            return (
+                                                <div 
+                                                    key={s} 
+                                                    className={`dash-slot ${slotClass}`}
+                                                    title={slotData ? slotData.filename : `No data for slot ${s}`}
+                                                    onClick={() => handleSlotClick(slotData)}
+                                                ></div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                    </div>
+                </div>
+            );
+        }
+
+        function MetadataModal({ view, onClose }) {
+            if (!view) return null;
+            const hasTech = view.tech && Object.keys(view.tech).length > 0;
+            return (
+                <div className="modal-overlay" onClick={onClose}>
+                    <div className="modal-content" onClick={e => e.stopPropagation()}>
+                        <div style={{display:'flex', justifyContent:'space-between', borderBottom:'1px solid #ddd', paddingBottom:'10px'}}>
+                            <h3 style={{margin:0}}>Metadata: {view.title}</h3>
+                            <button onClick={onClose} style={{border:'none',background:'none',fontSize:'24px',cursor:'pointer',lineHeight:1}}>&times;</button>
+                        </div>
+                        <div style={{marginTop:'15px'}}>
+                            {hasTech && (
+                                <>
+                                    <strong style={{display:'block', marginBottom:'5px'}}>Technical Metadata</strong>
+                                    <table className="metadata-table">
+                                        <tbody>
+                                            {Object.entries(view.tech).map(([k, v]) => (
+                                                <tr key={k}><td className="metadata-key">{k}</td><td>{formatAttrValue(v)}</td></tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </>
+                            )}
+                            <strong style={{display:'block', marginTop:'20px', marginBottom:'5px'}}>Attributes</strong>
+                            {view.data && Object.keys(view.data).length > 0 ? (
+                                <table className="metadata-table">
+                                    <thead><tr><th>Attribute Name</th><th>Value</th></tr></thead>
+                                    <tbody>
+                                        {Object.entries(view.data).sort().map(([k, v]) => (
+                                            <tr key={k}><td className="metadata-key">{k}</td><td>{formatAttrValue(v)}</td></tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            ) : (
+                                <p style={{fontSize:'0.9rem', color:'#666'}}>No attributes found.</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function Colorbar({ units, colormapName, min, max, position }) {
+            const canvasRef = useRef(null);
+            const style = useMemo(() => {
+                const s = { position:'absolute', background:'rgba(0,0,0,0.6)', color:'white', padding:'10px', borderRadius:'5px', zIndex:10, fontSize:'12px', fontFamily:'sans-serif' };
+                if (position.includes('top')) s.top = '20px'; else s.bottom = '20px';
+                if (position.includes('left')) s.left = '20px'; else s.right = '20px';
+                return s;
+            }, [position]);
+            
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                if (!canvas || min === Infinity) return;
+                const ctx = canvas.getContext('2d');
+                const grad = ctx.createLinearGradient(0, 0, 200, 0);
+                const cm = colorMaps[colormapName] || colorMaps.viridis;
+                for (let i=0; i<=1; i+=0.01) {
+                    const value = (min === max) ? min : min + (max-min)*i;
+                    const rgba = cm(value, min, max);
+                    if (rgba.some(isNaN)) {
+                        grad.addColorStop(i, 'rgba(0,0,0,0)');
+                    } else {
+                        grad.addColorStop(i, `rgba(${rgba[0]},${rgba[1]},${rgba[2]},${rgba[3]/255})`);
+                    }
+                }
+                ctx.fillStyle = grad; ctx.fillRect(0,0,200,20);
+            }, [colormapName, min, max]);
+            
+            if (min === Infinity) return null;
+            return (
+                <div style={style}>
+                    <div style={{textAlign:'center', marginBottom:'5px'}}>{units}</div>
+                    <canvas ref={canvasRef} width="200" height="20" style={{border:'1px solid #fff'}} />
+                    <div style={{display:'flex', justifyContent:'space-between', marginTop:'5px'}}><span>{min.toFixed(2)}</span><span>{max.toFixed(2)}</span></div>
+                </div>
+            );
+        }
+
+        function PanZoomControls({ onPan, onZoom, toolMode, onSetToolMode, overlaySettings, onUpdateOverlay, colorMap, onSetColorMap, isColorbarVisible, onToggleColorbar, colorbarPosition, onSetColorbarPosition, onExport, fullDims }) {
+            const [pos, setPos] = useState({ x: 20, y: 20 });
+            const [dragging, setDragging] = useState(false);
+            const offset = useRef({ x:0, y:0 });
+
+            const startDrag = (e) => {
+                if (['INPUT', 'SELECT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+                e.stopPropagation();
+                setDragging(true);
+                offset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
+            };
+
+            useEffect(() => {
+                const move = (e) => {
+                    if (!dragging) return;
+                    setPos({ x: Math.max(0, e.clientX - offset.current.x), y: Math.max(0, e.clientY - offset.current.y) });
+                };
+                const stop = () => setDragging(false);
+                document.addEventListener('mousemove', move);
+                document.addEventListener('mouseup', stop);
+                return () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', stop); };
+            }, [dragging]);
+
+            const btnStyle = { background:'#fff', border:'1px solid #ccc', color:'#333', width:'30px', height:'30px', margin:'2px', cursor:'pointer', fontWeight:'bold', borderRadius:'3px' };
+            const blockStyle = { marginTop:'5px', paddingTop:'5px', borderTop:'1px solid #555', width:'100%', display:'flex', flexDirection:'column', gap:'5px' };
+            const headerStyle = { fontSize:'11px', fontWeight:'bold', color:'#fff', textAlign:'center', width:'100%', padding:'2px 0', textTransform:'uppercase' };
+
+            return (
+                <div style={{ position:'absolute', left:`${pos.x}px`, top:`${pos.y}px`, display:'flex', flexDirection:'column', alignItems:'center', background:'rgba(0,0,0,0.65)', padding:'5px', borderRadius:'5px', color:'white', zIndex:100, width:'130px', cursor:'move', userSelect:'none' }} onMouseDown={startDrag}>
+                    <div style={{display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'2px', width:'100px', marginBottom:'5px'}}>
+                        <div/><button style={btnStyle} onClick={()=>onPan(0, 40)}>↑</button><div/>
+                        <button style={btnStyle} onClick={()=>onPan(40, 0)}>←</button><button style={btnStyle} onClick={()=>onZoom(1)}>⌾</button><button style={btnStyle} onClick={()=>onPan(-40,0)}>→</button>
+                        <div/><button style={btnStyle} onClick={()=>onPan(0, -40)}>↓</button><div/>
+                    </div>
+                    <div style={{display:'flex', justifyContent:'space-between', width:'100%'}}>
+                        <button style={btnStyle} onClick={()=>onZoom(1.2)}>+</button>
+                        <button style={btnStyle} onClick={()=>onZoom(0.8)}>-</button>
+                    </div>
+                    
+                    <div style={blockStyle}>
+                        <div style={headerStyle}>Tool</div>
+                        <label style={{fontSize:'11px', cursor:'pointer'}}><input type="radio" checked={toolMode==='pan'} onChange={()=>onSetToolMode('pan')} /> Pan</label>
+                        <label style={{fontSize:'11px', cursor:'pointer'}}><input type="radio" checked={toolMode==='picker'} onChange={()=>onSetToolMode('picker')} /> Picker</label>
+                    </div>
+                    
+                    <div style={blockStyle}>
+                        <div style={headerStyle}>Map Overlay</div>
+                        <button style={{width:'100%', padding:'5px', cursor:'pointer', fontWeight:'bold', borderRadius:'3px'}} onClick={()=>onUpdateOverlay({ visible: !overlaySettings.visible })}>
+                            {overlaySettings.visible ? 'Hide Map' : 'Show Map'}
+                        </button>
+                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:'11px'}}>
+                            <label>Color:</label>
+                            <input type="color" style={{width:'40px', height:'25px', padding:'1px', cursor:'pointer', background:'transparent', border:'1px solid #555'}} value={overlaySettings.color} onChange={e=>onUpdateOverlay({color: e.target.value})} />
+                        </div>
+                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:'11px'}}>
+                            <label>Width:</label>
+                            <input type="range" min="0.5" max="10" step="0.1" style={{width:'60px'}} value={overlaySettings.width} onChange={e=>onUpdateOverlay({width: parseFloat(e.target.value)})} />
+                        </div>
+                    </div>
+                    
+                    <div style={blockStyle}>
+                        <div style={headerStyle}>Colorbar</div>
+                        <select style={{width:'100%', padding:'4px 2px', borderRadius:'3px', cursor:'pointer'}} value={colorMap} onChange={e=>onSetColorMap(e.target.value)}>
+                            {Object.keys(colorMaps).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        <button style={{width:'100%', padding:'5px', cursor:'pointer', fontWeight:'bold', borderRadius:'3px'}} onClick={onToggleColorbar}>{isColorbarVisible ? 'Hide Bar' : 'Show Bar'}</button>
+                    </div>
+                    
+                    <div style={blockStyle}>
+                        <div style={headerStyle}>Download</div>
+                        <button style={{width:'100%', background:'#d4edda', color:'#155724', padding:'4px', fontSize:'10px', cursor:'pointer', borderRadius:'3px'}} onClick={()=>onExport(1)}>Full ({fullDims[1]}x{fullDims[0]})</button>
+                        <button style={{width:'100%', background:'#d4edda', color:'#155724', padding:'4px', fontSize:'10px', cursor:'pointer', borderRadius:'3px'}} onClick={()=>onExport(0.5)}>Half</button>
+                    </div>
+                </div>
+            );
+        }
+
+        function VolumeControls({ colorMap, onSetColorMap, isColorbarVisible, onToggleColorbar, colorbarPosition, onSetColorbarPosition }) {
+            const [pos, setPos] = useState({ x: 20, y: 20 });
+            const [dragging, setDragging] = useState(false);
+            const offset = useRef({ x:0, y:0 });
+
+            const startDrag = (e) => {
+                if (['INPUT', 'SELECT', 'BUTTON', 'LABEL'].includes(e.target.tagName)) return;
+                e.stopPropagation();
+                setDragging(true);
+                offset.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
+            };
+
+            useEffect(() => {
+                const move = (e) => {
+                    if (!dragging) return;
+                    setPos({ x: Math.max(0, e.clientX - offset.current.x), y: Math.max(0, e.clientY - offset.current.y) });
+                };
+                const stop = () => setDragging(false);
+                document.addEventListener('mousemove', move);
+                document.addEventListener('mouseup', stop);
+                return () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', stop); };
+            }, [dragging]);
+
+            const blockStyle = { marginTop:'5px', paddingTop:'5px', borderTop:'1px solid #555', width:'100%', display:'flex', flexDirection:'column', gap:'5px' };
+            const headerStyle = { fontSize:'11px', fontWeight:'bold', color:'#fff', textAlign:'center', width:'100%', padding:'2px 0', textTransform:'uppercase' };
+            const posButton = { background: '#f8f9fa', border: '1px solid #dee2e6', color: '#212529', padding: '4px', fontSize: '10px', cursor: 'pointer', borderRadius: '3px' };
+            const posButtonActive = { background: '#007bff', color: 'white', borderColor: '#0056b3' };
+            const positions = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+            const labels = {'top-left': 'TL', 'top-right': 'TR', 'bottom-left': 'BL', 'bottom-right': 'BR'};
+
+            return (
+                <div style={{ position:'absolute', left:`${pos.x}px`, top:`${pos.y}px`, display:'flex', flexDirection:'column', alignItems:'center', background:'rgba(0,0,0,0.65)', padding:'5px', borderRadius:'5px', color:'white', zIndex:100, width:'130px', cursor:'move', userSelect:'none' }} onMouseDown={startDrag}>
+                    <div style={{...blockStyle, marginTop: 0, borderTop: 'none'}}>
+                        <div style={headerStyle}>Colorbar</div>
+                        <select style={{width:'100%', padding:'4px 2px', borderRadius:'3px', cursor:'pointer'}} value={colorMap} onChange={e=>onSetColorMap(e.target.value)}>
+                            {Object.keys(colorMaps).sort().map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        <button style={{width:'100%', padding:'5px', cursor:'pointer', fontWeight:'bold', borderRadius:'3px', background:'#e9ecef', border:'1px solid #ced4da', color:'#495057'}} onClick={onToggleColorbar}>{isColorbarVisible ? 'Hide Bar' : 'Show Bar'}</button>
+                        <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:'11px', width: '100%', marginTop: '3px'}}>
+                            <label>Position:</label>
+                            <div style={{display:'grid', gridTemplateColumns:'1fr 1fr', gap:'3px'}}>
+                                {positions.map(p => (
+                                    <button key={p} style={{...posButton, ...(colorbarPosition === p ? posButtonActive : {})}} onClick={() => onSetColorbarPosition(p)}>{labels[p]}</button>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function DataView1D({ layer, onRemove, onReorder, index, totalLayers }) {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (!chartRef.current || !layer || !layer.values) return;
+                const ctx = chartRef.current.getContext('2d');
+
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+
+                const MAX_POINTS = 5000;
+                let data = Array.from(layer.values);
+                let labels = Array.from({length: data.length}, (_, i) => i);
+
+                if (data.length > MAX_POINTS) {
+                    const step = Math.ceil(data.length / MAX_POINTS);
+                    data = data.filter((_, i) => i % step === 0);
+                    labels = labels.filter((_, i) => i % step === 0);
+                }
+
+                chartInstance.current = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: layer.title,
+                            data: data,
+                            borderColor: '#007bff',
+                            borderWidth: 1.5,
+                            pointRadius: 0,
+                            fill: false,
+                            spanGaps: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        animation: false,
+                        parsing: false,
+                        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { title: { display: true, text: 'Index' } },
+                            y: { title: { display: true, text: layer.units || 'Value' } }
+                        }
+                    }
+                });
+
+                return () => { if (chartInstance.current) chartInstance.current.destroy(); };
+            }, [layer]);
+
+            return (
+                <div className="view-container">
+                    <div className="view-header">
+                        <span className="view-header-title" title={layer.title || layer.name}>{layer.title || layer.name} (1D Sequence)</span>
+                        {onRemove && onReorder && (
+                            <div className="view-header-buttons">
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'left')} disabled={index===0} title="Move Left">&larr;</button>
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'right')} disabled={index===totalLayers-1} title="Move Right">&rarr;</button>
+                                <button className="view-btn view-btn-close" onClick={() => onRemove(layer.name)} title="Close View">&times;</button>
+                            </div>
+                        )}
+                    </div>
+                    <div className="view-canvas-wrapper" style={{ padding: '15px', backgroundColor: 'white', position: 'relative' }}>
+                        <div style={{ position: 'absolute', inset: '15px' }}>
+                            <canvas ref={chartRef}></canvas>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function DataView3D({ layer, colormapName, onSetColorMap, onRemove, onReorder, index, totalLayers }) {
+            const containerRef = useRef(null);
+            const rendererRef = useRef(null);
+            const sceneRef = useRef(null);
+            const cameraRef = useRef(null);
+            const meshRef = useRef(null);
+            
+            const dims = layer.dims;
+            const n = dims.length;
+
+            const strides = useMemo(() => {
+                const s = new Array(n);
+                let currentStride = 1;
+                for (let i = n - 1; i >= 0; i--) {
+                    s[i] = currentStride;
+                    currentStride *= dims[i];
+                }
+                return s;
+            }, [dims, n]);
+
+            const [axisMap, setAxisMap] = useState({
+                x: n - 1,
+                y: Math.max(0, n - 2),
+                z: Math.max(0, n - 3)
+            });
+
+            const [currentSlice, setCurrentSlice] = useState(0);
+            const [isCbVisible, setIsCbVisible] = useState(true);
+            const [cbPos, setCbPos] = useState('bottom-right');
+            const [domain, setDomain] = useState({ min:0, max:1 });
+
+            const width = dims[axisMap.x];
+            const height = dims[axisMap.y];
+            const totalSlices = dims[axisMap.z];
+
+            useEffect(() => {
+                if (!containerRef.current) return;
+                const container = containerRef.current;
+                
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x222222);
+                sceneRef.current = scene;
+
+                const aspect = width / height;
+
+                const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+                camera.position.z = Math.max(1.5, 1.5 / aspect);
+                cameraRef.current = camera;
+
+                const renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setSize(container.clientWidth, container.clientHeight);
+                container.appendChild(renderer.domElement);
+                rendererRef.current = renderer;
+
+                const geometry = new THREE.PlaneGeometry(2 * Math.min(1, aspect), 2 * Math.min(1, 1/aspect));
+                const material = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide });
+                const mesh = new THREE.Mesh(geometry, material);
+                scene.add(mesh);
+                meshRef.current = mesh;
+
+                const animate = () => {
+                    requestAnimationFrame(animate);
+                    if (rendererRef.current && sceneRef.current && cameraRef.current) {
+                        rendererRef.current.render(sceneRef.current, cameraRef.current);
+                    }
+                };
+                animate();
+
+                const handleResize = () => {
+                    if (!containerRef.current || !cameraRef.current || !rendererRef.current) return;
+                    const w = containerRef.current.clientWidth;
+                    const h = containerRef.current.clientHeight;
+                    cameraRef.current.aspect = w / h;
+                    cameraRef.current.updateProjectionMatrix();
+                    rendererRef.current.setSize(w, h);
+                };
+                
+                const obs = new ResizeObserver(() => handleResize());
+                obs.observe(container);
+
+                return () => {
+                    obs.disconnect();
+                    if (containerRef.current && rendererRef.current) {
+                        containerRef.current.removeChild(rendererRef.current.domElement);
+                    }
+                    if (rendererRef.current) rendererRef.current.dispose();
+                    if (geometry) geometry.dispose();
+                    if (material) material.dispose();
+                };
+            }, [width, height]);
+
+            useEffect(() => {
+                if (!meshRef.current || !layer.values) return;
+                
+                const cm = colorMaps[colormapName] || colorMaps.viridis;
+                const currentDomain = layer.domain || getDomain(layer.values);
+                setDomain(currentDomain);
+                
+                const imgData = new Uint8Array(width * height * 4);
+                const xStride = strides[axisMap.x];
+                const yStride = strides[axisMap.y];
+                const zStride = strides[axisMap.z];
+                const vals = layer.values;
+
+                for (let y = 0; y < height; y++) {
+                    for (let x = 0; x < width; x++) {
+                        const srcIdx = (x * xStride) + (y * yStride) + (currentSlice * zStride);
+                        const destIdx = y * width + x;
+                        const val = vals[srcIdx];
+                        const rgba = cm(val, currentDomain.min, currentDomain.max);
+                        
+                        imgData[destIdx * 4] = rgba[0];
+                        imgData[destIdx * 4 + 1] = rgba[1];
+                        imgData[destIdx * 4 + 2] = rgba[2];
+                        imgData[destIdx * 4 + 3] = rgba[3];
+                    }
+                }
+
+                const texture = new THREE.DataTexture(imgData, width, height, THREE.RGBAFormat);
+                texture.needsUpdate = true;
+                
+                if (meshRef.current.material.map) {
+                    meshRef.current.material.map.dispose();
+                }
+                meshRef.current.material.map = texture;
+                meshRef.current.material.needsUpdate = true;
+
+            }, [layer, currentSlice, colormapName, width, height, axisMap, strides]);
+
+            const handleAxisChange = (axis, value) => {
+                setAxisMap(prev => ({ ...prev, [axis]: parseInt(value) }));
+                setCurrentSlice(0);
+            };
+
+            return (
+                <div className="view-container">
+                    <div className="view-header">
+                        <span className="view-header-title" title={layer.title || layer.name}>{layer.title || layer.name} (3D Volume Slice)</span>
+                        {onRemove && onReorder && (
+                            <div className="view-header-buttons">
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'left')} disabled={index===0} title="Move Left">&larr;</button>
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'right')} disabled={index===totalLayers-1} title="Move Right">&rarr;</button>
+                                <button className="view-btn view-btn-close" onClick={() => onRemove(layer.name)} title="Close View">&times;</button>
+                            </div>
+                        )}
+                    </div>
+                    <div style={{ padding: '8px', background: '#343a40', color: 'white', display: 'flex', flexDirection: 'column', gap: '5px', borderTop: '1px solid #555' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '15px', fontSize: '11px', flexWrap: 'wrap' }}>
+                            <label>X-Axis: 
+                                <select value={axisMap.x} onChange={e => handleAxisChange('x', e.target.value)} style={{marginLeft: '4px', padding: '1px'}}>
+                                    {dims.map((d, i) => <option key={i} value={i}>Dim {i} (len: {d})</option>)}
+                                </select>
+                            </label>
+                            <label>Y-Axis: 
+                                <select value={axisMap.y} onChange={e => handleAxisChange('y', e.target.value)} style={{marginLeft: '4px', padding: '1px'}}>
+                                    {dims.map((d, i) => <option key={i} value={i}>Dim {i} (len: {d})</option>)}
+                                </select>
+                            </label>
+                            <label>Slice (Z): 
+                                <select value={axisMap.z} onChange={e => handleAxisChange('z', e.target.value)} style={{marginLeft: '4px', padding: '1px'}}>
+                                    {dims.map((d, i) => <option key={i} value={i}>Dim {i} (len: {d})</option>)}
+                                </select>
+                            </label>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <span style={{ fontSize: '11px', marginRight: '10px', minWidth: '90px' }}>Slice Z: {currentSlice} / {totalSlices - 1}</span>
+                            <input 
+                                type="range" 
+                                min="0" 
+                                max={Math.max(0, totalSlices - 1)} 
+                                value={currentSlice} 
+                                onChange={(e) => setCurrentSlice(parseInt(e.target.value))}
+                                style={{ flexGrow: 1, cursor: 'pointer' }}
+                            />
+                        </div>
+                    </div>
+                    <div className="view-canvas-wrapper" ref={containerRef} style={{ overflow: 'hidden', position: 'relative' }}>
+                        <VolumeControls 
+                            colorMap={colormapName} onSetColorMap={onSetColorMap}
+                            isColorbarVisible={isCbVisible} onToggleColorbar={() => setIsCbVisible(v => !v)}
+                            colorbarPosition={cbPos} onSetColorbarPosition={setCbPos}
+                        />
+                        {isCbVisible && <Colorbar units={layer.units === '1' ? layer.name : (layer.units || 'N/A')} colormapName={colormapName} min={domain.min} max={domain.max} position={cbPos} />}
+                    </div>
+                </div>
+            );
+        }
+
+        function InteractiveDataView({ layer, colormapName, onSetColorMap, coastlineData, boundaryData, toolMode, onSetToolMode, onPixelPick, onRemove, onReorder, index, totalLayers }) {
+            const viewRef = useRef(null);
+            const canvasRef = useRef(null);
+            const offscreenCanvasRef = useRef(document.createElement('canvas')); 
+            const globeRef = useRef(null);
+            
+            const [is3D, setIs3D] = useState(false);
+            const [transform, setTransform] = useState({ x:0, y:0, scale:1 });
+            const [domain, setDomain] = useState({ min:0, max:1 });
+            
+            const isPanning = useRef(false);
+            const [cursorPanning, setCursorPanning] = useState(false);
+            const lastPos = useRef({ x:0, y:0 });
+            
+            const [overlaySettings, setOverlaySettings] = useState({ visible: true, color: '#00ffff', width: 2.0 });
+            const [isCbVisible, setIsCbVisible] = useState(true);
+            const [cbPos, setCbPos] = useState('bottom-right');
+
+            const spatialIndex = useMemo(() => layer?.coords ? createSpatialIndex(layer.coords.lats, layer.coords.lons, layer.dims) : null, [layer]);
+
+            useEffect(() => {
+                if (!layer || !layer.values) return;
+                const d = layer.domain || (layer.isRGB ? {min:0, max:255} : getDomain(layer.values));
+                setDomain(d);
+                
+                const [h, w] = layer.dims;
+                const offscreen = offscreenCanvasRef.current;
+                offscreen.width = w;
+                offscreen.height = h;
+                const offCtx = offscreen.getContext('2d');
+                
+                if (layer.isRGB) {
+                    const img = new ImageData(new Uint8ClampedArray(layer.values), w, h);
+                    offCtx.putImageData(img, 0, 0);
+                } else {
+                    const img = offCtx.createImageData(w, h);
+                    const cm = colorMaps[colormapName] || colorMaps.viridis;
+                    for (let i=0; i<layer.values.length; i++) {
+                        const rgba = cm(layer.values[i], d.min, d.max);
+                        img.data[i*4]=rgba[0]; img.data[i*4+1]=rgba[1]; img.data[i*4+2]=rgba[2]; img.data[i*4+3]=rgba[3];
+                    }
+                    offCtx.putImageData(img, 0, 0);
+                }
+                
+                if (viewRef.current) {
+                    const { clientWidth, clientHeight } = viewRef.current;
+                    const s = Math.min(clientWidth/w, clientHeight/h) * 0.95;
+                    setTransform({ x: (clientWidth - w*s)/2, y: (clientHeight - h*s)/2, scale: s });
+                }
+            }, [layer, colormapName]);
+
+            // Setup 3D Globe when toggled
+            useEffect(() => {
+                if (!is3D || !globeRef.current || !layer) return;
+                const container = globeRef.current;
+                container.innerHTML = '';
+                const width = container.clientWidth;
+                const height = container.clientHeight;
+
+                const scene = new THREE.Scene();
+                const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
+                camera.position.z = 350;
+
+                const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                renderer.setSize(width, height);
+                container.appendChild(renderer.domElement);
+
+                scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+                const sun = new THREE.DirectionalLight(0xffffff, 1.3);
+                sun.position.set(5, 3, 5);
+                scene.add(sun);
+
+                const earthGroup = new THREE.Group();
+                scene.add(earthGroup);
+
+                const textureLoader = new THREE.TextureLoader();
+                const earthMat = new THREE.MeshPhongMaterial({
+                    color: 0xffffff,
+                    map: textureLoader.load('https://unpkg.com/three-globe/example/img/earth-blue-marble.jpg')
+                });
+                const earthSphere = new THREE.Mesh(new THREE.SphereGeometry(100, 128, 64), earthMat);
+                earthGroup.add(earthSphere);
+
+                const tex = new THREE.CanvasTexture(offscreenCanvasRef.current);
+                tex.flipY = true;
+                const dataMat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, opacity: 0.9 });
+                const dataSphere = new THREE.Mesh(new THREE.SphereGeometry(100.4, 128, 64), dataMat);
+                earthGroup.add(dataSphere);
+
+                // Start oriented over North America generally
+                earthGroup.rotation.y = Math.PI / 1.5; 
+                earthGroup.rotation.x = Math.PI / 8;
+
+                let isDraggingGlobe = false, prev = {x:0, y:0};
+                container.onmousedown = (e) => { isDraggingGlobe=true; prev={x:e.clientX, y:e.clientY}; }
+                window.onmousemove = (e) => {
+                    if(!isDraggingGlobe) return;
+                    earthGroup.rotation.y += (e.clientX - prev.x) * 0.005;
+                    earthGroup.rotation.x += (e.clientY - prev.y) * 0.005;
+                    prev={x:e.clientX, y:e.clientY};
+                };
+                window.onmouseup = () => isDraggingGlobe=false;
+                window.onmouseleave = () => isDraggingGlobe=false;
+
+                const animate = () => {
+                    const animId = requestAnimationFrame(animate);
+                    renderer.render(scene, camera);
+                    container.dataset.animId = animId;
+                }
+                animate();
+
+                const handleResize = () => {
+                    if (!globeRef.current || !camera || !renderer) return;
+                    const w = globeRef.current.clientWidth;
+                    const h = globeRef.current.clientHeight;
+                    camera.aspect = w / h;
+                    camera.updateProjectionMatrix();
+                    renderer.setSize(w, h);
+                };
+                const obs = new ResizeObserver(() => handleResize());
+                obs.observe(container);
+
+                return () => { 
+                    obs.disconnect();
+                    cancelAnimationFrame(container.dataset.animId);
+                    renderer.dispose(); 
+                }
+            }, [is3D, layer, overlaySettings, colormapName]);
+
+            const draw = useCallback(() => {
+                if (is3D) return;
+                const canvas = canvasRef.current;
+                if (!canvas || !layer) return;
+                const ctx = canvas.getContext('2d');
+                const [h, w] = layer.dims;
+                const viewDiv = viewRef.current;
+                if (!viewDiv) return;
+                
+                canvas.width = viewDiv.clientWidth;
+                canvas.height = viewDiv.clientHeight;
+
+                ctx.save();
+                ctx.fillStyle = '#222'; ctx.fillRect(0,0,canvas.width, canvas.height);
+                ctx.translate(transform.x, transform.y); ctx.scale(transform.scale, transform.scale);
+                ctx.imageSmoothingEnabled = false;
+                ctx.drawImage(offscreenCanvasRef.current, 0, 0);
+
+                if (overlaySettings.visible && spatialIndex) {
+                    ctx.strokeStyle = overlaySettings.color;
+                    ctx.lineWidth = overlaySettings.width / transform.scale;
+                    
+                    const drawFeats = (feats, isBoundary) => {
+                        if(!feats) return;
+                        const { minLat, maxLat, minLon, maxLon } = spatialIndex.domain;
+                        if (isBoundary) ctx.lineWidth = (overlaySettings.width / 2) / transform.scale;
+                        
+                        ctx.beginPath();
+                        for (let fIdx = 0; fIdx < feats.length; fIdx++) {
+                            const f = feats[fIdx];
+                            if (!f || !f.geometry || !f.geometry.type) continue; 
+                            const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+                            if (!polys) continue;
+                            
+                            for (let pIdx = 0; pIdx < polys.length; pIdx++) {
+                                const p = polys[pIdx];
+                                if (!p) continue;
+                                for (let rIdx = 0; rIdx < p.length; rIdx++) {
+                                    const ring = p[rIdx];
+                                    if (!ring) continue;
+                                    let first = true;
+                                    for (let ptIdx = 0; ptIdx < ring.length; ptIdx++) {
+                                        const pt = ring[ptIdx];
+                                        // Fast rejection padded by 2 degrees
+                                        if (pt[1] < minLat - 2 || pt[1] > maxLat + 2 || pt[0] < minLon - 2 || pt[0] > maxLon + 2) {
+                                            first = true;
+                                            continue;
+                                        }
+                                        const px = findClosestPixel(pt[1], pt[0], spatialIndex);
+                                        if (px) { 
+                                            if(first) { ctx.moveTo(px.x, px.y); first=false; } 
+                                            else ctx.lineTo(px.x, px.y); 
+                                        } else {
+                                            first = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        ctx.stroke();
+                    };
+                    drawFeats(coastlineData, false);
+                    ctx.strokeStyle = `${overlaySettings.color}99`;
+                    drawFeats(boundaryData, true);
+                }
+                ctx.restore();
+            }, [layer, transform, coastlineData, boundaryData, overlaySettings, spatialIndex, is3D]);
+
+            const drawRef = useRef(draw);
+            useEffect(() => { drawRef.current = draw; }, [draw]);
+            useEffect(() => { draw(); }, [draw]);
+
+            useEffect(() => {
+                const viewDiv = viewRef.current;
+                if (!viewDiv) return;
+                const obs = new ResizeObserver(() => {
+                    if (drawRef.current) drawRef.current();
+                });
+                obs.observe(viewDiv);
+                return () => { obs.unobserve(viewDiv); };
+            }, []);
+
+            const handleMouse = (e) => {
+                if (is3D) return;
+                if (toolMode === 'pan') {
+                    if (e.type === 'mousedown') { 
+                        if (e.target.closest('div[style*="cursor: move"]')) return;
+                        isPanning.current = true; 
+                        setCursorPanning(true);
+                        lastPos.current = { x: e.clientX, y: e.clientY }; 
+                    }
+                    else if (e.type === 'mouseup' || e.type === 'mouseleave') { 
+                        isPanning.current = false; 
+                        setCursorPanning(false);
+                    }
+                    else if (e.type === 'mousemove' && isPanning.current) {
+                        const dx = e.clientX - lastPos.current.x;
+                        const dy = e.clientY - lastPos.current.y;
+                        setTransform(t => ({ ...t, x: t.x + dx, y: t.y + dy }));
+                        lastPos.current = { x: e.clientX, y: e.clientY };
+                    }
+                } else if (e.type === 'click' && toolMode === 'picker') {
+                    if (e.target.closest('div[style*="cursor: move"]')) return;
+                    const rect = canvasRef.current.getBoundingClientRect();
+                    const ix = Math.floor((e.clientX - rect.left - transform.x) / transform.scale);
+                    const iy = Math.floor((e.clientY - rect.top - transform.y) / transform.scale);
+                    const [h, w] = layer.dims;
+                    if (ix>=0 && ix<w && iy>=0 && iy<h) {
+                        const idx = iy * w + ix;
+                        let valStr = layer.isRGB 
+                            ? `RGB(${layer.values[idx*4]}, ${layer.values[idx*4+1]}, ${layer.values[idx*4+2]})`
+                            : layer.values[idx];
+                        onPixelPick({
+                            layerTitle: layer.title,
+                            value: valStr,
+                            units: layer.units,
+                            lat: layer.coords?.lats[idx],
+                            lon: layer.coords?.lons[idx],
+                            pixel: { x: ix, y: iy }
+                        });
+                    }
+                }
+            };
+
+            const handleWheel = (e) => {
+                if (is3D) return;
+                e.preventDefault();
+                const factor = e.deltaY > 0 ? 0.95 : 1.05;
+                setTransform(t => ({ ...t, scale: Math.max(0.1, t.scale * factor) }));
+            };
+
+            const handleExport = useCallback((scaleFactor) => {
+                if (!layer) return;
+
+                const [fullHeight, fullWidth] = layer.dims;
+                const exportWidth = Math.floor(fullWidth * scaleFactor);
+                const exportHeight = Math.floor(fullHeight * scaleFactor);
+
+                const mainExportCanvas = document.createElement('canvas');
+                mainExportCanvas.width = exportWidth;
+                mainExportCanvas.height = exportHeight;
+                const ctx = mainExportCanvas.getContext('2d');
+                
+                ctx.imageSmoothingEnabled = false; 
+                ctx.drawImage(offscreenCanvasRef.current, 0, 0, exportWidth, exportHeight);
+                
+                if (overlaySettings.visible && spatialIndex) {
+                    ctx.save();
+                    ctx.scale(scaleFactor, scaleFactor);
+                    
+                    const drawFeats = (feats, isBoundary) => {
+                        if(!feats) return;
+                        const { minLat, maxLat, minLon, maxLon } = spatialIndex.domain;
+                        
+                        const currentScale = transform.scale || 1;
+                        const exportLineWidth = overlaySettings.width / currentScale;
+                        
+                        if (isBoundary) {
+                            ctx.lineWidth = exportLineWidth / 2;
+                            ctx.strokeStyle = `${overlaySettings.color}99`;
+                        } else {
+                            ctx.lineWidth = exportLineWidth;
+                            ctx.strokeStyle = overlaySettings.color;
+                        }
+                        
+                        ctx.beginPath();
+                        for (let fIdx = 0; fIdx < feats.length; fIdx++) {
+                            const f = feats[fIdx];
+                            if (!f || !f.geometry || !f.geometry.type) continue; 
+                            const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+                            if (!polys) continue;
+                            
+                            for (let pIdx = 0; pIdx < polys.length; pIdx++) {
+                                const p = polys[pIdx];
+                                if (!p) continue;
+                                for (let rIdx = 0; rIdx < p.length; rIdx++) {
+                                    const ring = p[rIdx];
+                                    if (!ring) continue;
+                                    let first = true;
+                                    for (let ptIdx = 0; ptIdx < ring.length; ptIdx++) {
+                                        const pt = ring[ptIdx];
+                                        // Fast rejection padded by 2 degrees
+                                        if (pt[1] < minLat - 2 || pt[1] > maxLat + 2 || pt[0] < minLon - 2 || pt[0] > maxLon + 2) {
+                                            first = true;
+                                            continue;
+                                        }
+                                        const px = findClosestPixel(pt[1], pt[0], spatialIndex);
+                                        if (px) { 
+                                            if(first) { ctx.moveTo(px.x, px.y); first=false; } 
+                                            else ctx.lineTo(px.x, px.y); 
+                                        } else {
+                                            first = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        ctx.stroke();
+                    };
+
+                    drawFeats(coastlineData, false);
+                    drawFeats(boundaryData, true);
+                    
+                    ctx.restore();
+                }
+
+                if (isCbVisible && !layer.isRGB) {
+                    const colorbarScaleRefWidth = 1200;
+                    const colorbarScale = Math.max(0.5, exportWidth / colorbarScaleRefWidth);
+                    const colorbarTotalWidth = 220 * colorbarScale;
+                    const colorbarTotalHeight = 60 * colorbarScale;
+                    const padding = 10 * colorbarScale;
+                    const fontSize = 12 * colorbarScale;
+                    
+                    let cbX = padding;
+                    let cbY = padding;
+                    if (cbPos.includes('bottom')) {
+                        cbY = exportHeight - colorbarTotalHeight - padding;
+                    }
+                    if (cbPos.includes('right')) {
+                        cbX = exportWidth - colorbarTotalWidth - padding;
+                    }
+                    
+                    const cbGradientWidth = colorbarTotalWidth - (padding * 2);
+                    const cbGradientHeight = 20 * colorbarScale;
+
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+                    ctx.fillRect(cbX, cbY, colorbarTotalWidth, colorbarTotalHeight);
+                    
+                    const gradient = ctx.createLinearGradient(cbX + padding, 0, cbX + padding + cbGradientWidth, 0);
+                    const colorizer = colorMaps[colormapName] || colorMaps.viridis;
+                    if (domain.min !== Infinity) {
+                        for (let i = 0; i <= 1; i += 0.01) {
+                            const value = (domain.min === domain.max) ? domain.min : domain.min + (domain.max - domain.min) * i;
+                            const rgba = colorizer(value, domain.min, domain.max);
+                            if (!rgba.some(isNaN)) {
+                                gradient.addColorStop(i, `rgba(${rgba[0]},${rgba[1]},${rgba[2]},${rgba[3] / 255})`);
+                            }
+                        }
+                    }
+                    ctx.fillStyle = gradient;
+                    ctx.fillRect(cbX + padding, cbY + padding + (15 * colorbarScale), cbGradientWidth, cbGradientHeight);
+                    
+                    const colorbarTitleText = (layer.units === '1') ? layer.name : (layer.units || 'N/A');
+                    ctx.fillStyle = 'white';
+                    ctx.font = `${fontSize}px sans-serif`;
+                    ctx.textAlign = 'center';
+                    ctx.fillText(colorbarTitleText, cbX + colorbarTotalWidth / 2, cbY + padding + (12 * colorbarScale));
+                    
+                    ctx.textAlign = 'left';
+                    ctx.fillText(domain.min.toFixed(2), cbX + padding, cbY + padding + cbGradientHeight + (25 * colorbarScale));
+                    
+                    ctx.textAlign = 'right';
+                    ctx.fillText(domain.max.toFixed(2), cbX + padding + cbGradientWidth, cbY + padding + cbGradientHeight + (25 * colorbarScale));
+                }
+
+                const filename = `${(layer.title || layer.name).replace(/[^a-z0-9]/gi, '_').toUpperCase()}_${exportWidth}X${exportHeight}.png`;
+                const link = document.createElement('a');
+                link.download = filename;
+                link.href = mainExportCanvas.toDataURL('image/png');
+                link.click();
+            }, [layer, colormapName, domain, coastlineData, boundaryData, spatialIndex, overlaySettings, transform, isCbVisible, cbPos]);
+
+            const cbTitle = layer.units === '1' ? layer.name : (layer.units || 'N/A');
+
+            return (
+                <div className="view-container">
+                    <div className="view-header">
+                        <span className="view-header-title" title={layer.title || layer.name}>{layer.title || layer.name}</span>
+                        {onRemove && onReorder && (
+                            <div className="view-header-buttons">
+                                <button className="view-btn" onClick={() => setIs3D(!is3D)} title="Toggle 3D Globe">{is3D ? '2D View' : '3D Globe'}</button>
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'left')} disabled={index===0} title="Move Left">&larr;</button>
+                                <button className="view-btn" onClick={() => onReorder(layer.name, 'right')} disabled={index===totalLayers-1} title="Move Right">&rarr;</button>
+                                <button className="view-btn view-btn-close" onClick={() => onRemove(layer.name)} title="Close View">&times;</button>
+                            </div>
+                        )}
+                    </div>
+                    <div ref={viewRef} className="view-canvas-wrapper" onMouseDown={handleMouse} onMouseMove={handleMouse} onMouseUp={handleMouse} onMouseLeave={handleMouse} onClick={handleMouse} style={{cursor: is3D ? 'auto' : (toolMode==='pan'? (cursorPanning?'grabbing':'grab') : 'crosshair')}} onWheel={handleWheel}>
+                        {is3D ? (
+                            <div ref={globeRef} style={{position:'absolute', top:0, left:0, right:0, bottom:0, cursor:'move'}} />
+                        ) : (
+                            <>
+                                <canvas ref={canvasRef} style={{position:'absolute', top:0, left:0, pointerEvents:'none'}} />
+                                <PanZoomControls onPan={(dx, dy)=>setTransform(t=>({...t, x: t.x+dx, y:t.y+dy}))} onZoom={f=>setTransform(t=>({...t, scale: f===1?1:t.scale*f}))} toolMode={toolMode} onSetToolMode={onSetToolMode} overlaySettings={overlaySettings} onUpdateOverlay={s=>setOverlaySettings(prev=>({...prev, ...s}))} colorMap={colormapName} onSetColorMap={onSetColorMap} isColorbarVisible={isCbVisible} onToggleColorbar={()=>setIsCbVisible(!isCbVisible)} colorbarPosition={cbPos} onSetColorbarPosition={setCbPos} onExport={handleExport} fullDims={layer.dims} parentRef={viewRef} />
+                            </>
+                        )}
+                        {isCbVisible && !layer.isRGB && <Colorbar units={cbTitle} colormapName={colormapName} min={domain.min} max={domain.max} position={cbPos} />}
+                    </div>
+                </div>
+            );
+        }
+
+        // --- MAIN APP ---
+
+        function App() {
+            const notifier = useNotifier();
+            const [ready, setReady] = useState(false);
+            const [sources, setSources] = useState({});
+            const [layers, setLayers] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [loadingMessage, setLoadingMessage] = useState('Loading...');
+            const [downloadProgress, setDownloadProgress] = useState(0);
+            const [toolMode, setToolMode] = useState('pan');
+            const [colorMap, setColorMap] = useState('grayscale');
+            const [pixelInfo, setPixelInfo] = useState(null);
+            const [metaView, setMetaView] = useState(null);
+            const [isDashboardOpen, setIsDashboardOpen] = useState(false);
+            const [coastline, setCoastline] = useState(null);
+            const [boundaries, setBoundaries] = useState(null);
+            const [special, setSpecial] = useState({ lat:false, lon:false, map:false });
+
+            useEffect(() => {
+                appLogger.info("Initializing engine and assets...");
+                h5wasm.ready.then(() => {
+                    appLogger.info("h5wasm Ready.");
+                    setReady(true);
+                    const params = new URLSearchParams(window.location.search);
+                    const fileUrl = params.get('fileUrl');
+                    if (fileUrl) fetchFileUrl(fileUrl);
+                });
+                
+                const loadMaps = async () => {
+                    try {
+                        const [worldRes, usRes] = await Promise.all([
+                            fetch('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json'),
+                            fetch('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json')
+                        ]);
+                        const world = await worldRes.json();
+                        const us = await usRes.json();
+                        
+                        setCoastline([topojson.feature(world, world.objects.land)]);
+                        const countries = topojson.feature(world, world.objects.countries).features;
+                        const states = topojson.feature(us, us.objects.states).features;
+                        setBoundaries([...countries, ...states]);
+                        appLogger.info("Map Atlas loaded successfully.");
+                    } catch (err) {
+                        appLogger.error("Map Atlas Load Error:", err);
+                    }
+                };
+                loadMaps();
+            }, []);
+
+            const fetchFileUrl = async (url, explicitName = null, initialVar = null) => {
+                const fileName = explicitName || url.split('/').pop() || 'download.nc';
+                setLoadingMessage(`Downloading: ${fileName}`);
+                setLoading(true);
+                setDownloadProgress(0);
+                appLogger.info(`Starting download from URL: ${url}`);
+                try {
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    
+                    const reader = response.body.getReader();
+                    const contentLength = +response.headers.get('Content-Length');
+                    let receivedLength = 0;
+                    let chunks = [];
+                    
+                    while(true) {
+                        const {done, value} = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                        receivedLength += value.length;
+                        if (contentLength) setDownloadProgress(Math.round((receivedLength / contentLength) * 100));
+                    }
+
+                    let chunksAll = new Uint8Array(receivedLength);
+                    let position = 0;
+                    for(let chunk of chunks) { chunksAll.set(chunk, position); position += chunk.length; }
+                    
+                    setDownloadProgress(0);
+                    appLogger.info(`Download complete, initiating upload flow for ${fileName}`);
+                    await handleUpload(chunksAll.buffer, fileName, initialVar);
+                } catch (error) {
+                    appLogger.error(`Failed to load URL:`, error);
+                    notifier.error(`Failed to load URL: ${error.message}`);
+                    setLoading(false);
+                }
+            };
+
+            const handleConfigLoaded = (config) => {
+                appLogger.info("Config loaded", config);
+                if (config.url) {
+                    fetchFileUrl(config.url, config.layerName, config.primaryVariable);
+                }
+            };
+
+            const handleUpload = async (buf, name, initialVar = null) => {
+                appLogger.info(`Upload triggered for: ${name}`);
+                setLoadingMessage(`Processing Metadata for ${name}...`);
+                setLoading(true);
+                try {
+                    const id = `f${Date.now()}`;
+                    appLogger.info(`Writing file to FS: ${id}`);
+                    h5wasm.FS.writeFile(id, new Uint8Array(buf));
+                    const f = new h5wasm.File(id, 'r');
+                    const root = f.get('/');
+                    const vars = [];
+                    
+                    const scan = (g) => {
+                        for (let k of g.keys()) {
+                            const it = g.get(k);
+                            if (it instanceof h5wasm.Group) scan(it);
+                            else if (it.shape && it.shape.length >= 1) { 
+                                vars.push({ 
+                                    name: k, 
+                                    shape: it.shape, 
+                                    dtype: it.dtype, 
+                                    attributes: extractAttributes(it),
+                                    units: (it.attrs && it.attrs.units) ? it.attrs.units.value : 'N/A'
+                                });
+                            }
+                        }
+                    };
+                    scan(root);
+                    appLogger.info(`Scanned ${vars.length} variables.`);
+                    
+                    const globalAttrs = extractAttributes(root);
+                    const meta = { variables: vars, globalAttributes: globalAttrs, fileBuffer: buf, isGeospatial: false };
+                    
+                    appLogger.info("Checking for geospatial projection...");
+                    const proj = findVar(h5wasm, root, 'goes_imager_projection');
+                    if (proj) {
+                        setLoadingMessage('Computing Geospatial Coordinates...');
+                        appLogger.info("Found GOES projection. Computing coordinates...");
+                        const x = findVar(h5wasm, root, 'x');
+                        const y = findVar(h5wasm, root, 'y');
+                        if (x && y) {
+                            const geoData = { globalAttributes: extractAttributes(proj), variables: { x:{data: unpack(x,false)}, y:{data: unpack(y,false)} } };
+                            const coords = await geoService.process(geoData);
+                            meta.coords = coords;
+                            meta.isGeospatial = true;
+                            meta.latLonDomain = { lat: getDomain(coords.lats), lon: getDomain(coords.lons) };
+                            appLogger.info("Geo computation complete.");
+                        }
+                    }
+                    
+                    setSources(prev => ({ ...prev, [name]: meta }));
+                    f.close(); h5wasm.FS.unlink(id);
+                    notifier.success(`Loaded ${name}`);
+                    
+                    if (initialVar) {
+                        addLayer(meta, name, initialVar);
+                    }
+                } catch (e) { 
+                    appLogger.error("Upload Error:", e);
+                    notifier.error(e.message); 
+                }
+                setLoading(false);
+            };
+
+            const addLayer = async (sourceMeta, srcName, varName) => {
+                if (layers.some(l => l.name === varName)) return;
+                appLogger.info(`Adding layer: ${varName} from source: ${srcName}`);
+                setLoadingMessage(`Loading Layer: ${varName}...`);
+                setLoading(true);
+                const id = `v${Date.now()}`;
+                try {
+                    h5wasm.FS.writeFile(id, new Uint8Array(sourceMeta.fileBuffer));
+                    const f = new h5wasm.File(id, 'r');
+                    const v = findVar(h5wasm, f.get('/'), varName);
+                    if (!v) throw new Error("Variable not found");
+                    const attrs = extractAttributes(v);
+                    const values = unpack(v, true);
+                    const layer = {
+                        name: varName, title: `${srcName} - ${varName}`,
+                        values: values, dims: v.shape, units: attrs.units || 'N/A',
+                        attributes: attrs, coords: sourceMeta.coords,
+                        tech: { dtype: v.dtype, shape: v.shape },
+                        domain: getDomain(values),
+                        isRGB: false
+                    };
+                    setLayers(prev => [...prev, layer]);
+                    f.close(); h5wasm.FS.unlink(id);
+                } catch(e) {
+                    appLogger.error("Add Layer Error:", e);
+                    notifier.error(e.message);
+                }
+                setLoading(false);
+            };
+
+            const handleShowMetadata = (e, title, data, tech = null) => {
+                e.stopPropagation();
+                setMetaView({ title, data, tech });
+            };
+
+            // Science Sandbox Execution
+            const runScience = async (recipe) => {
+                const required = {
+                    'ndvi': ['02', '03'],
+                    'geocolor': ['01', '02', '03'],
+                    'dust': ['11', '13', '14', '15']
+                }[recipe];
+
+                let arrays = {};
+                let baseLayer = null;
+                for (let ch of required) {
+                    const l = layers.find(layer => layer.name.includes(`C${ch}`) || layer.title.includes(`Ch ${ch}`));
+                    if (l) { arrays[`Ch${ch}`] = l.values; if(!baseLayer) baseLayer = l; }
+                    else {
+                        notifier.error(`Missing required channel C${ch} for ${recipe}`);
+                        return;
+                    }
+                }
+                
+                setLoading(true); setLoadingMessage(`Computing ${recipe.toUpperCase()}...`);
+                try {
+                    const result = await scienceService.compute(recipe, arrays);
+                    if (result) {
+                        setLayers(prev => [...prev, {
+                            name: `${recipe}_derived_${Date.now()}`,
+                            title: `Derived: ${recipe.toUpperCase()}`,
+                            values: result.values,
+                            isRGB: result.isRGB,
+                            dims: baseLayer.dims,
+                            coords: baseLayer.coords,
+                            domain: result.domain || {min: 0, max: 255},
+                            units: result.isRGB ? 'RGB Composite' : 'Index'
+                        }]);
+                        notifier.success(`Computed ${recipe.toUpperCase()} successfully.`);
+                    }
+                } catch(e) { 
+                    appLogger.error(e);
+                    notifier.error(`Computation failed: ${e.message}`); 
+                }
+                setLoading(false);
+            };
+
+            const processGribData = (gribMessageBuffer) => {
+                if (typeof Module === 'undefined' || !Module._malloc) throw new Error("WASM environment not ready");
+                const dataPtr = Module._malloc(gribMessageBuffer.byteLength);
+                if (!dataPtr) throw new Error("WASM Memory Allocation failed.");
+                try {
+                    Module.HEAPU8.set(new Uint8Array(gribMessageBuffer), dataPtr);
+                    const resultPtr = Module.ccall('process_grib_field', 'number', ['number', 'number', 'number'], [dataPtr, gribMessageBuffer.byteLength, 1]);
+                    if (!resultPtr) throw new Error("C function returned NULL.");
+                    
+                    const metadataJsonPtr = Module.getValue(resultPtr, '*');
+                    const metadataLen = Module.getValue(resultPtr + 4, 'i32');
+                    const dataPtr_ = Module.getValue(resultPtr + 8, '*');
+                    const numPoints = Module.getValue(resultPtr + 16, 'i32');
+                    
+                    const metadata = JSON.parse(Module.UTF8ToString(metadataJsonPtr, metadataLen));
+                    const values = new Float32Array(Module.HEAPU8.buffer, dataPtr_, numPoints).slice();
+                    
+                    Module.ccall('free_result_memory', null, ['number'], [resultPtr]);
+                    return { metadata, values };
+                } finally {
+                    Module._free(dataPtr);
+                }
+            };
+
+            const loadGfsTcdc = async () => {
+                setLoading(true); setLoadingMessage(`Fetching GFS TCDC...`);
+                try {
+                    const dateInput = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+                    const urlBase = `https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.${dateInput}/12/atmos/gfs.t12z.pgrb2.0p25.f006`;
+                    
+                    const idxRes = await fetch(`${urlBase}.idx`);
+                    if (!idxRes.ok) throw new Error("GFS Index not available for this time. Try again later.");
+                    const idxText = await idxRes.text();
+                    
+                    const lines = idxText.split('\n').filter(l => l.trim().length > 0);
+                    const startBytes = lines.map(line => parseInt(line.split(':')[1], 10));
+                    
+                    let targetLineIdx = lines.findIndex(l => l.includes(':TCDC:entire atmosphere'));
+                    if (targetLineIdx === -1) throw new Error("TCDC not found in GFS run.");
+                    
+                    const startByte = startBytes[targetLineIdx];
+                    const endByte = (targetLineIdx + 1 < startBytes.length && !isNaN(startBytes[targetLineIdx+1])) ? startBytes[targetLineIdx+1] - 1 : '';
+                    
+                    const res = await fetch(urlBase, { headers: { 'Range': `bytes=${startByte}-${endByte}` } });
+                    const buffer = await res.arrayBuffer();
+                    
+                    const decoded = processGribData(buffer);
+                    setLayers(prev => [...prev, {
+                        name: `GFS_TCDC_${Date.now()}`,
+                        title: 'GFS TCDC (Cloud Cover Overlay)',
+                        values: decoded.values,
+                        isRGB: false,
+                        dims: [decoded.metadata.grid.ny, decoded.metadata.grid.nx],
+                        units: '%',
+                        domain: {min: 0, max: 100},
+                        coords: null // Bypassing robust coordinate mapping for the simple overlay example
+                    }]);
+                    notifier.success("Loaded GFS TCDC successfully.");
+                } catch(e) {
+                    appLogger.error(e);
+                    notifier.error(`GFS Fetch failed: ${e.message}`);
+                }
+                setLoading(false);
+            };
+
+            const toggleCloud = (type) => {
+                if (type === 'gfs') loadGfsTcdc();
+                else if (type === 'abi') {
+                    notifier.info("Load ACM product via the GOES Dashboard to overlay.");
+                    setIsDashboardOpen(true);
+                }
+            }
+
+            const geoSource = useMemo(() => Object.values(sources).find(s => s.isGeospatial), [sources]);
+            const geoSourceDims = geoSource && geoSource.variables.length > 0 ? geoSource.variables[0].shape : null;
+            const hasGoesData = !!geoSource;
+
+            if (!ready) return <div className="loading-overlay">Initializing Engine...</div>;
+
+            return (
+                <div className="main-layout">
+                    <div className="sidebar">
+                        <h3>Controls</h3>
+                        <Uploader onNcFileLoaded={(buf, name) => handleUpload(buf, name)} onConfigLoaded={handleConfigLoaded} />
+                        
+                        <div style={{marginBottom: '1rem', marginTop: '1rem'}}>
+                            <button 
+                                onClick={() => setIsDashboardOpen(true)} 
+                                style={{width: '100%', padding: '10px', backgroundColor: '#0284c7', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', fontSize: '14px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)'}}
+                            >
+                                🌐 Browse NOAA GOES AWS
+                            </button>
+                        </div>
+
+                        <div style={{border:'1px solid #ccc', padding:'10px', borderRadius:'4px', marginTop:'1rem', backgroundColor:'#f8f9fa'}}>
+                            <h4 style={{marginTop:0, marginBottom:'10px'}}>Science Algorithm Sandbox</h4>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: '5px'}}>
+                                <button className="view-btn" onClick={() => runScience('ndvi')} style={{padding: '6px', textAlign: 'left'}}>Compute NDVI (Requires C02, C03)</button>
+                                <button className="view-btn" onClick={() => runScience('geocolor')} style={{padding: '6px', textAlign: 'left'}}>Compute GeoColor (Requires C01, C02, C03)</button>
+                                <button className="view-btn" onClick={() => runScience('dust')} style={{padding: '6px', textAlign: 'left'}}>Compute Dust (Requires C11, C13, C14, C15)</button>
+                            </div>
+                            <h5 style={{marginTop: '15px', marginBottom: '5px'}}>Cloud Overlay Toggle</h5>
+                            <div style={{display: 'flex', flexDirection: 'column', gap: '5px'}}>
+                                <button className="view-btn" onClick={() => toggleCloud('abi')} style={{padding: '6px', textAlign: 'left'}}>ABI ACM Mask (Load via S3)</button>
+                                <button className="view-btn" onClick={() => toggleCloud('gfs')} style={{padding: '6px', textAlign: 'left'}}>Fetch GFS TCDC (Global 0.25°)</button>
+                            </div>
+                        </div>
+
+                        <div style={{border:'1px solid #ccc', padding:'10px', borderRadius:'4px', marginTop:'1rem'}}>
+                            <h4 style={{marginTop:0, marginBottom:'10px'}}>Data &amp; Layers</h4>
+                            {Object.entries(sources).length === 0 ? <p>No data sources loaded.</p> : null}
+                            {Object.entries(sources).map(([name, src]) => (
+                                <div key={name}>
+                                    <div style={{background:'#f0f2f5', padding:'8px 12px', borderBottom:'1px solid #ddd', fontWeight:'bold', fontSize:'1rem', display:'flex', justifyContent:'space-between'}}>
+                                        <span style={{overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'200px'}}>{name}</span>
+                                        <span className="info-icon" title="Global Attributes" onClick={(e)=>handleShowMetadata(e, name, src.globalAttributes, { type: 'File Group' })}>ⓘ</span>
+                                    </div>
+                                    <div style={{padding:'5px 0'}}>
+                                        {src.variables.map(v => {
+                                            const isActive = layers.some(l => l.name === v.name);
+                                            return (
+                                                <div key={v.name} style={{display:'flex', justifyContent:'space-between', alignItems:'center', padding:'6px 12px', cursor:'pointer', borderRadius:'3px', marginBottom:'2px', backgroundColor: isActive ? '#e7f5ff' : 'transparent'}} onClick={() => !isActive && addLayer(src, name, v.name)}>
+                                                    <span style={{fontWeight: isActive ? 'bold' : 'normal', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'200px'}}>{v.name}</span>
+                                                    <div style={{display:'flex', gap:'5px', alignItems:'center'}}>
+                                                        <span className="info-icon" title="Dataset Metadata" onClick={(e)=>handleShowMetadata(e, v.name, v.attributes, { dtype: v.dtype, shape: v.shape })}>ⓘ</span>
+                                                        {isActive && <div style={{cursor:'pointer', color:'#a00', fontWeight:'bold', borderRadius:'50%', width:'20px', height:'20px', display:'flex', alignItems:'center', justifyContent:'center', border:'1px solid #fcc', background:'#fff0f0'}} onClick={(e)=>{e.stopPropagation(); setLayers(prev=>prev.filter(x=>x.name!==v.name));}}>&times;</div>}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            ))}
+
+                            <div style={{marginTop:'20px'}}>
+                                <h4 style={{borderTop:'1px solid #ddd', paddingTop:'15px', marginBottom:'10px'}}>Derived Views</h4>
+                                <button style={{display:'block', width:'100%', padding:'8px', marginTop:'5px', textAlign:'left', border:'1px solid #ced4da', borderRadius:'4px', cursor:'pointer', background: special.lat ? '#cce5ff' : '#e9ecef'}} onClick={()=>setSpecial(s=>({...s, lat:!s.lat}))}>Latitude Raster</button>
+                                <button style={{display:'block', width:'100%', padding:'8px', marginTop:'5px', textAlign:'left', border:'1px solid #ced4da', borderRadius:'4px', cursor:'pointer', background: special.lon ? '#cce5ff' : '#e9ecef'}} onClick={()=>setSpecial(s=>({...s, lon:!s.lon}))}>Longitude Raster</button>
+                                <button style={{display:'block', width:'100%', padding:'8px', marginTop:'5px', textAlign:'left', border:'1px solid #ced4da', borderRadius:'4px', cursor:'pointer', background: special.map ? '#cce5ff' : '#e9ecef'}} onClick={()=>setSpecial(s=>({...s, map:!s.map}))}>Map Overlay</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1, backgroundColor: '#e9ecef' }}>
+                        <div className="content-grid" style={{ flexGrow: 1 }}>
+                            {layers.map((l, i) => {
+                                const is1D = l.dims.length === 1;
+                                const is3DPlus = l.dims.length >= 3;
+                                
+                                if (is1D) {
+                                    return <DataView1D key={`${l.name}-${i}`} layer={l} index={i} totalLayers={layers.length} onRemove={n => setLayers(prev => prev.filter(x => x.name !== n))} onReorder={(n, d) => {
+                                        const idx = layers.findIndex(x => x.name === n);
+                                        const next = d === 'left' ? idx - 1 : idx + 1;
+                                        const copy = [...layers]; [copy[idx], copy[next]] = [copy[next], copy[idx]];
+                                        setLayers(copy);
+                                    }} />;
+                                } else if (is3DPlus) {
+                                    return <DataView3D key={`${l.name}-${i}`} layer={l} colormapName={colorMap} onSetColorMap={setColorMap} index={i} totalLayers={layers.length} onRemove={n => setLayers(prev => prev.filter(x => x.name !== n))} onReorder={(n, d) => {
+                                        const idx = layers.findIndex(x => x.name === n);
+                                        const next = d === 'left' ? idx - 1 : idx + 1;
+                                        const copy = [...layers]; [copy[idx], copy[next]] = [copy[next], copy[idx]];
+                                        setLayers(copy);
+                                    }} />;
+                                } else {
+                                    return <InteractiveDataView key={`${l.name}-${i}`} layer={l} colormapName={colorMap} onSetColorMap={setColorMap} coastlineData={coastline} boundaryData={boundaries} toolMode={toolMode} onSetToolMode={setToolMode} onPixelPick={setPixelInfo} onRemove={n => setLayers(prev => prev.filter(x => x.name !== n))} onReorder={(n, d) => {
+                                        const idx = layers.findIndex(x => x.name === n);
+                                        const next = d === 'left' ? idx - 1 : idx + 1;
+                                        const copy = [...layers]; [copy[idx], copy[next]] = [copy[next], copy[idx]];
+                                        setLayers(copy);
+                                    }} index={i} totalLayers={layers.length} />;
+                                }
+                            })}
+                            {special.lat && geoSource && geoSourceDims && (
+                                <InteractiveDataView layer={{ name: 'lat', title: 'Calculated Latitude', values: geoSource.coords.lats, dims: geoSourceDims, domain: geoSource.latLonDomain.lat, units: 'Degrees', coords: geoSource.coords }} colormapName={colorMap} onSetColorMap={setColorMap} coastlineData={coastline} boundaryData={boundaries} toolMode={toolMode} onSetToolMode={setToolMode} onPixelPick={setPixelInfo} onRemove={()=>setSpecial(s=>({...s, lat:false}))} onReorder={()=>null} index={0} totalLayers={1} />
+                            )}
+                            {special.lon && geoSource && geoSourceDims && (
+                                <InteractiveDataView layer={{ name: 'lon', title: 'Calculated Longitude', values: geoSource.coords.lons, dims: geoSourceDims, domain: geoSource.latLonDomain.lon, units: 'Degrees', coords: geoSource.coords }} colormapName={colorMap} onSetColorMap={setColorMap} coastlineData={coastline} boundaryData={boundaries} toolMode={toolMode} onSetToolMode={setToolMode} onPixelPick={setPixelInfo} onRemove={()=>setSpecial(s=>({...s, lon:false}))} onReorder={()=>null} index={0} totalLayers={1} />
+                            )}
+                            {special.map && geoSource && geoSourceDims && (
+                                <InteractiveDataView layer={{ name: 'map_overlay', title: 'Map Overlay', values: new Float32Array(geoSource.coords.lats.length).fill(1), dims: geoSourceDims, domain: {min:0, max:1}, units: 'Overlay', coords: geoSource.coords }} colormapName="grayscale" onSetColorMap={()=>null} coastlineData={coastline} boundaryData={boundaries} toolMode={toolMode} onSetToolMode={setToolMode} onPixelPick={setPixelInfo} onRemove={()=>setSpecial(s=>({...s, map:false}))} onReorder={()=>null} index={0} totalLayers={1} />
+                            )}
+                        </div>
+                        {hasGoesData && (
+                            <div style={{ textAlign: 'center', padding: '4px' }}>
+                                <span className="attribution-text">Data from NOAA's Geostationary Operational Environmental Satellites (GOES)-R Series</span>
+                            </div>
+                        )}
+                    </div>
+                    
+                    {loading && (
+                        <div className="loading-overlay">
+                            <div className="loading-content">
+                                <div>{loadingMessage}</div>
+                                {downloadProgress > 0 && (
+                                    <div className="progress-bar-container">
+                                        <div className="progress-bar" style={{ width: `${downloadProgress}%` }}>{downloadProgress}%</div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                    
+                    {pixelInfo && (
+                        <div style={{position:'fixed', top:'20px', right:'20px', background:'rgba(255, 255, 255, 0.95)', border:'1px solid #ccc', padding:'1rem', borderRadius:'5px', boxShadow:'0 4px 12px rgba(0,0,0,0.2)', zIndex:5000, fontSize:'0.9rem', width:'260px'}}>
+                            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.75rem', fontSize:'1.1rem', color:'#495057'}}>
+                                <span style={{fontWeight:'bold'}}>Pixel Inspector</span>
+                                <button onClick={()=>setPixelInfo(null)} style={{background:'none',border:'none',fontSize:'1.5rem',lineHeight:'1',cursor:'pointer',padding:'0 0 0 1rem',color:'#888'}}>&times;</button>
+                            </div>
+                            <div style={{display:'flex', justifyContent:'space-between', padding:'0.25rem 0'}}><span style={{color:'#6c757d'}}>Layer:</span><span style={{fontWeight:'bold', color:'#212529'}}>{pixelInfo.layerTitle}</span></div>
+                            <div style={{display:'flex', justifyContent:'space-between', padding:'0.25rem 0'}}><span style={{color:'#6c757d'}}>Value:</span><span style={{fontWeight:'bold', color:'#212529'}}>{typeof pixelInfo.value === 'number' ? pixelInfo.value.toFixed(4) : pixelInfo.value} {pixelInfo.units}</span></div>
+                            <div style={{display:'flex', justifyContent:'space-between', padding:'0.25rem 0'}}><span style={{color:'#6c757d'}}>Latitude:</span><span style={{fontWeight:'bold', color:'#212529'}}>{pixelInfo.lat ? pixelInfo.lat.toFixed(4) + '°' : 'N/A'}</span></div>
+                            <div style={{display:'flex', justifyContent:'space-between', padding:'0.25rem 0'}}><span style={{color:'#6c757d'}}>Longitude:</span><span style={{fontWeight:'bold', color:'#212529'}}>{pixelInfo.lon ? pixelInfo.lon.toFixed(4) + '°' : 'N/A'}</span></div>
+                            <div style={{display:'flex', justifyContent:'space-between', padding:'0.25rem 0'}}><span style={{color:'#6c757d'}}>Pixel (X,Y):</span><span style={{fontWeight:'bold', color:'#212529'}}>{pixelInfo.pixel.x}, {pixelInfo.pixel.y}</span></div>
+                        </div>
+                    )}
+                    
+                    <MetadataModal view={metaView} onClose={()=>setMetaView(null)} />
+
+                    <GoesDashboardModal 
+                        isOpen={isDashboardOpen} 
+                        onClose={() => setIsDashboardOpen(false)} 
+                        onSelectFile={(url, filename) => {
+                            setIsDashboardOpen(false);
+                            window.location.href = `${window.location.pathname}?fileUrl=${encodeURIComponent(url)}`;
+                        }} 
+                    />
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<NotificationProvider><App /></NotificationProvider>);
+    </script>
+</body>
+</html>
