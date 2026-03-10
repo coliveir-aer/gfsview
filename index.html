@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Serverless Generic NWP Globe (WASM)</title>
+    <title>GFS NWP Global Display</title>
     
     <!-- Dependencies -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -188,6 +188,52 @@
             white-space: nowrap;
             line-height: 1.6;
         }
+
+        .floating-header {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 15, 15, 0.85);
+            padding: 12px 24px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+            z-index: 100;
+            text-align: center;
+            font-size: 13px;
+            color: #eee;
+            display: none;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+            white-space: nowrap;
+        }
+
+        .floating-footer {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 15, 15, 0.85);
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+            z-index: 100;
+            text-align: center;
+            font-size: 12px;
+            display: flex;
+            gap: 20px;
+            box-shadow: 0 -8px 32px rgba(0,0,0,0.5);
+        }
+        
+        .floating-footer a {
+            color: #4db8ff;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .floating-footer a:hover {
+            text-decoration: underline;
+        }
     </style>
 
     <!-- Configure WASM Loading to point to the local files -->
@@ -210,8 +256,15 @@
     <div id="render-container"></div>
     <div id="data-tooltip"></div>
     
+    <div id="product-header" class="floating-header"></div>
+    
+    <div class="floating-footer">
+        <a href="https://registry.opendata.aws/noaa-gfs-bdp-pds/" target="_blank">NOAA / AWS Data</a>
+        <a href="https://github.com/coliveir-aer/gfsview/" target="_blank">GitHub Repo</a>
+    </div>
+    
     <div class="ui-overlay">
-        <h1>GENERIC NWP GLOBE</h1>
+        <h1>GFS NWP Global Display</h1>
         <p class="description">Live Serverless Decoder (WASM)</p>
 
         <div style="margin-bottom: 15px;">
@@ -579,7 +632,7 @@
                 productsDb[product].items[level] = { start: startBytes[i], end: endByte };
             }
 
-            // Synthesize Generic 'WIND' Vector product where both U and V exist
+            // Synthesize 'WIND' Vector product where both U and V exist
             if (productsDb['UGRD'] && productsDb['VGRD']) {
                 const uLevels = Array.from(productsDb['UGRD'].levels);
                 const commonLevels = uLevels.filter(l => productsDb['VGRD'].levels.has(l));
@@ -736,6 +789,21 @@
                     setStatus("RENDERING SCALAR HEATMAP...");
                     renderScalarToGlobe(decoded, prod);
                 }
+
+                const dateInput = document.getElementById('date-picker').value;
+                const cycle = document.getElementById('cycle-select').value;
+                const fhr = document.getElementById('fhr-slider').value;
+                
+                const runDate = new Date(`${dateInput}T${cycle}:00:00Z`);
+                const validDate = new Date(runDate.getTime() + (parseInt(fhr) * 60 * 60 * 1000));
+                
+                const runTimeStr = `${dateInput} ${cycle}Z`;
+                const validTimeStr = validDate.toISOString().replace('T', ' ').substring(0, 16) + 'Z';
+                const title = PRODUCT_ALIASES[prod] || prod;
+                
+                const headerEl = document.getElementById('product-header');
+                headerEl.innerHTML = `<strong>${title} (${level})</strong> &nbsp;|&nbsp; <span style="color:#aaa;">Run: ${runTimeStr}</span> &nbsp;|&nbsp; <span style="color:#00ff88;">Valid: ${validTimeStr}</span>`;
+                headerEl.style.display = 'block';
 
                 setStatus(`LOADED: ${prod} at ${level}`, "#00ff88");
             } catch (err) {
