@@ -268,8 +268,8 @@
 
             <div id="vector-controls" style="display:none;">
                 <div class="control-group">
-                    <label>Barb Density</label>
-                    <input type="range" id="density-slider" min="1" max="10" value="8">
+                    <label>Barb Spacing <span id="density-label" style="color:#aaa; font-weight:normal;">1.25&deg;</span></label>
+                    <input type="range" id="density-slider" min="0.25" max="5.0" step="0.25" value="1.25">
                 </div>
                 <div class="control-group">
                     <label>Vector Resolution</label>
@@ -280,8 +280,8 @@
                     </select>
                 </div>
                 <div class="control-group">
-                    <label>Min Speed Cutoff <span id="min-spd-label" style="color:#aaa; font-weight:normal;">15 kts</span></label>
-                    <input type="range" id="min-spd-slider" min="0" max="60" step="1" value="15">
+                    <label>Min Speed Cutoff <span id="min-spd-label" style="color:#aaa; font-weight:normal;">5 kts</span></label>
+                    <input type="range" id="min-spd-slider" min="0" max="60" step="1" value="5">
                 </div>
             </div>
 
@@ -911,8 +911,9 @@
             const plotMax = Math.min(maxSpd, 150);
             updateLegendDisplay(0, plotMax, 'Wind Vector Speed (kts)', false, false);
 
-            const densityVal = parseInt(document.getElementById('density-slider').value);
-            const step = 11 - densityVal;
+            const spacingDeg = parseFloat(document.getElementById('density-slider').value);
+            const gridRes = 180.0 / (ny - 1);
+            const step = Math.max(1, Math.round(spacingDeg / gridRes));
             const resMult = parseInt(document.getElementById('res-select').value);
             const minSpdCutoff = parseInt(document.getElementById('min-spd-slider').value);
 
@@ -1016,6 +1017,11 @@
             // FHR Slider listener
             document.getElementById('fhr-slider').addEventListener('input', (e) => {
                 document.getElementById('fhr-label').innerText = String(e.target.value).padStart(3, '0');
+            });
+
+            // Density Slider listener
+            document.getElementById('density-slider').addEventListener('input', (e) => {
+                document.getElementById('density-label').innerHTML = `${parseFloat(e.target.value).toFixed(2)}&deg;`;
             });
 
             // Min Speed Slider listener
