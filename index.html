@@ -292,18 +292,22 @@
         <div class="control-group">
             <label>Resolution</label>
             <select id="resolution-select">
-                <option value="pgrb2.0p25" selected>0.25° (High)</option>
-                <option value="pgrb2.0p50">0.50° (Medium)</option>
-                <option value="pgrb2.1p00">1.00° (Low)</option>
+                <option value="pgrb2.0p25" selected>0.25&deg; (High)</option>
+                <option value="pgrb2.0p50">0.50&deg; (Medium)</option>
+                <option value="pgrb2.1p00">1.00&deg; (Low)</option>
             </select>
         </div>
 
         <div class="control-group">
-            <label><span>Forecast Horizon</span><span style="color:#4db8ff">+<span id="fhr-label">006</span>h</span></label>
-            <input type="range" id="fhr-slider" min="0" max="120" step="3" value="6">
+            <label><span>Forecast Horizon</span><span style="color:#4db8ff">+<span id="fhr-label">000</span>h</span></label>
+            <div style="display:flex; gap:8px; align-items:center;">
+                <button id="btn-fhr-sub" class="btn btn-outline" style="width:30px; padding:6px; margin:0;">-</button>
+                <input type="range" id="fhr-slider" min="0" max="120" step="3" value="0" style="flex-grow:1; margin:0;">
+                <button id="btn-fhr-add" class="btn btn-outline" style="width:30px; padding:6px; margin:0;">+</button>
+            </div>
         </div>
 
-        <button id="btn-load-idx" class="btn btn-outline" disabled>1. Load NWP Inventory</button>
+        <button id="btn-load-idx" class="btn btn-outline" style="display:none;" disabled>1. Load NWP Inventory</button>
 
         <!-- STAGE 2: Data Extraction -->
         <div id="extraction-controls" style="display:none;">
@@ -338,7 +342,7 @@
                 </div>
             </div>
 
-            <button id="btn-render" class="btn">2. Fetch & Render Data</button>
+            <button id="btn-render" class="btn" style="display:none;">2. Fetch & Render Data</button>
 
             <div id="legend-container">
                 <div style="text-align:center; font-size:10px; color:#888; margin-bottom:5px; text-transform:uppercase;" id="legend-title">Data Scale</div>
@@ -579,34 +583,57 @@
 
         // --- Dynamic Architecture Parsing ---
 
-        async function loadNWPInventory() {
-            const btnIdx = document.getElementById('btn-load-idx');
-            btnIdx.disabled = true;
+        async function findLatestGfsRun() {
+            let currentDate = new Date(Date.now() + 6 * 60 * 60 * 1000);
+            const checkHour = 'f168';
+            const resolution = document.getElementById('resolution-select').value;
             
+            for (let i = 0; i < 3; i++) {
+                const dateStr = currentDate.toISOString().slice(0, 10).replace(/-/g, '');
+                for (const cycle of [18, 12, 6, 0]) {
+                    const cycleStr = cycle.toString().padStart(2, '0');
+                    const testUrl = `${S3_BUCKET_URL}gfs.${dateStr}/${cycleStr}/atmos/gfs.t${cycleStr}z.${resolution}.${checkHour}.idx`;
+                    setStatus(`PROBING ${dateStr} ${cycleStr}Z...`);
+                    try {
+                        const response = await fetch(testUrl, { method: 'GET', headers: { 'Range': 'bytes=0-0' } });
+                        if (response.status === 206 || response.status === 200) {
+                            return { dateStr: currentDate.toISOString().slice(0, 10), cycle: cycleStr };
+                        }
+                    } catch (e) {
+                        console.warn(`Probe failed for ${testUrl}`, e);
+                    }
+                }
+                currentDate.setUTCDate(currentDate.getUTCDate() - 1);
+            }
+            return null;
+        }
+
+        async function loadNWPInventory() {
             const dateInput = document.getElementById('date-picker').value.replace(/-/g, '');
             const cycle = document.getElementById('cycle-select').value;
             const fhr = String(document.getElementById('fhr-slider').value).padStart(3, '0');
             const resolution = document.getElementById('resolution-select').value;
             
             const fileBase = `gfs.t${cycle}z.${resolution}.f${fhr}`;
-            currentUrlBase = `${S3_BUCKET_URL}gfs.${dateInput}/${cycle}/atmos/${fileBase}`;
+            const newUrlBase = `${S3_BUCKET_URL}gfs.${dateInput}/${cycle}/atmos/${fileBase}`;
 
             try {
-                setStatus(`FETCHING GRIB INDEX...`);
-                const res = await fetch(`${currentUrlBase}.idx`);
-                if (!res.ok) throw new Error("Data not available for this time.");
-                const idxText = await res.text();
+                if (currentUrlBase !== newUrlBase) {
+                    currentUrlBase = newUrlBase;
+                    setStatus(`FETCHING GRIB INDEX F${fhr}...`);
+                    const res = await fetch(`${currentUrlBase}.idx`);
+                    if (!res.ok) throw new Error("Data not available for this time.");
+                    const idxText = await res.text();
+                    
+                    parseIndexFile(idxText);
+                    document.getElementById('extraction-controls').style.display = 'block';
+                }
                 
-                parseIndexFile(idxText);
-                
-                setStatus(`INVENTORY LOADED (${Object.keys(productsDb).length} Products)`, "#00ff88");
-                document.getElementById('extraction-controls').style.display = 'block';
+                await fetchAndRenderLayer();
             } catch (e) {
                 console.error(e);
                 setStatus(`ERROR: ${e.message}`, "#ff4d4d");
                 document.getElementById('extraction-controls').style.display = 'none';
-            } finally {
-                btnIdx.disabled = false;
             }
         }
 
@@ -649,6 +676,7 @@
 
         function populateProductDropdown() {
             const select = document.getElementById('product-select');
+            const prevVal = select.value;
             select.innerHTML = '';
             
             // Sort products alphabetically, but prioritize WIND
@@ -665,10 +693,20 @@
                 select.appendChild(opt);
             });
 
+            if (prevVal && keys.includes(prevVal)) {
+                select.value = prevVal;
+            } else if (keys.length > 0) {
+                select.value = keys[0];
+            }
+
             // Set up listener for product change to repopulate levels
-            select.onchange = () => populateLevelDropdown(select.value);
+            select.addEventListener('change', () => {
+                populateLevelDropdown(select.value);
+                fetchAndRenderLayer();
+            });
+            
             // Trigger first population
-            populateLevelDropdown(keys[0]);
+            populateLevelDropdown(select.value);
         }
 
         function sortMeteorologicalLevels(levelsArray) {
@@ -692,6 +730,7 @@
 
         function populateLevelDropdown(productKey) {
             const select = document.getElementById('level-select');
+            const prevVal = select.value;
             select.innerHTML = '';
             
             if (!productsDb[productKey]) return;
@@ -711,6 +750,12 @@
                 opt.innerText = lvl;
                 select.appendChild(opt);
             });
+
+            if (prevVal && sortedLevels.includes(prevVal)) {
+                select.value = prevVal;
+            } else if (sortedLevels.length > 0) {
+                select.value = sortedLevels[0];
+            }
         }
 
         // --- Data Extraction & WebAssembly ---
@@ -1078,31 +1123,45 @@
 
         // --- Initialization Hooks ---
         window.addEventListener('wasmReady', () => {
-            // Setup Date Picker Defaults
-            const d = new Date(Date.now() - 24 * 60 * 60 * 1000);
-            document.getElementById('date-picker').value = d.toISOString().slice(0, 10);
+            // Setup automatic listeners
+            document.getElementById('date-picker').addEventListener('change', loadNWPInventory);
+            document.getElementById('cycle-select').addEventListener('change', loadNWPInventory);
+            document.getElementById('resolution-select').addEventListener('change', loadNWPInventory);
+            
+            document.getElementById('level-select').addEventListener('change', fetchAndRenderLayer);
+            document.getElementById('res-select').addEventListener('change', fetchAndRenderLayer);
             
             // FHR Slider listener
             document.getElementById('fhr-slider').addEventListener('input', (e) => {
                 document.getElementById('fhr-label').innerText = String(e.target.value).padStart(3, '0');
             });
+            document.getElementById('fhr-slider').addEventListener('change', loadNWPInventory);
+
+            // FHR Step buttons
+            function stepFhr(direction) {
+                const slider = document.getElementById('fhr-slider');
+                let val = parseInt(slider.value) + (direction * parseInt(slider.step));
+                val = Math.max(parseInt(slider.min), Math.min(val, parseInt(slider.max)));
+                slider.value = val;
+                document.getElementById('fhr-label').innerText = String(val).padStart(3, '0');
+                loadNWPInventory();
+            }
+            document.getElementById('btn-fhr-sub').addEventListener('click', () => stepFhr(-1));
+            document.getElementById('btn-fhr-add').addEventListener('click', () => stepFhr(1));
 
             // Density Slider listener
             document.getElementById('density-slider').addEventListener('input', (e) => {
                 document.getElementById('density-label').innerHTML = `${parseFloat(e.target.value).toFixed(2)}&deg;`;
             });
+            document.getElementById('density-slider').addEventListener('change', fetchAndRenderLayer);
 
             // Min Speed Slider listener
             document.getElementById('min-spd-slider').addEventListener('input', (e) => {
                 document.getElementById('min-spd-label').innerText = `${e.target.value} kts`;
             });
+            document.getElementById('min-spd-slider').addEventListener('change', fetchAndRenderLayer);
 
-            // Button Bindings
-            document.getElementById('btn-load-idx').addEventListener('click', loadNWPInventory);
-            document.getElementById('btn-load-idx').disabled = false;
-            
-            document.getElementById('btn-render').addEventListener('click', fetchAndRenderLayer);
-
+            // Toggle 2D Map listener
             const toggle2D = document.getElementById('toggle-2d');
             toggle2D.checked = is2DView;
             toggle2D.addEventListener('change', (e) => {
@@ -1129,8 +1188,19 @@
 
             initGlobe();
             
-            // Update status badge immediately when WASM finishes loading
-            setStatus("WASM READY - AWAITING INVENTORY", "#00ff88");
+            // Auto-detect and load the latest available GFS Run on startup
+            setStatus("FINDING LATEST RUN...", "#00ff88");
+            findLatestGfsRun().then(latestRun => {
+                if (latestRun) {
+                    document.getElementById('date-picker').value = latestRun.dateStr;
+                    document.getElementById('cycle-select').value = latestRun.cycle;
+                    document.getElementById('fhr-slider').value = 0;
+                    document.getElementById('fhr-label').innerText = '000';
+                    loadNWPInventory();
+                } else {
+                    setStatus("ERROR: NO RECENT RUNS FOUND", "#ff4d4d");
+                }
+            });
         });
     </script>
 </body>
