@@ -368,6 +368,7 @@
         let productsDb = {}; 
         let currentDecodedData = null;
         let currentProductType = null; // 'scalar' or 'vector'
+        let lastValidState = { date: '', cycle: '', res: '', fhr: 0 };
 
         // Human-readable aliases for common acronyms
         const PRODUCT_ALIASES = {
@@ -619,13 +620,36 @@
 
             try {
                 if (currentUrlBase !== newUrlBase) {
-                    currentUrlBase = newUrlBase;
                     setStatus(`FETCHING GRIB INDEX F${fhr}...`);
-                    const res = await fetch(`${currentUrlBase}.idx`);
+                    const res = await fetch(`${newUrlBase}.idx`);
                     if (!res.ok) throw new Error("Data not available for this time.");
                     const idxText = await res.text();
                     
-                    parseIndexFile(idxText);
+                    const newDb = parseIndexTextToDb(idxText);
+                    
+                    const selectedProd = document.getElementById('product-select').value;
+                    if (selectedProd && !newDb[selectedProd] && currentUrlBase !== "") {
+                        console.warn(`Product ${selectedProd} not available at F${fhr}. Reverting to previous state.`);
+                        setStatus(`${selectedProd} NOT AVAILABLE AT +${fhr}h`, "#ff4d4d");
+                        
+                        document.getElementById('date-picker').value = lastValidState.date;
+                        document.getElementById('cycle-select').value = lastValidState.cycle;
+                        document.getElementById('resolution-select').value = lastValidState.res;
+                        document.getElementById('fhr-slider').value = lastValidState.fhr;
+                        document.getElementById('fhr-label').innerText = String(lastValidState.fhr).padStart(3, '0');
+                        return;
+                    }
+                    
+                    currentUrlBase = newUrlBase;
+                    productsDb = newDb;
+                    lastValidState = {
+                        date: document.getElementById('date-picker').value,
+                        cycle: cycle,
+                        res: resolution,
+                        fhr: document.getElementById('fhr-slider').value
+                    };
+                    
+                    populateProductDropdown();
                     document.getElementById('extraction-controls').style.display = 'block';
                 }
                 
@@ -637,11 +661,11 @@
             }
         }
 
-        function parseIndexFile(idxText) {
+        function parseIndexTextToDb(idxText) {
             const lines = idxText.split('\n').filter(l => l.trim().length > 0);
             const startBytes = lines.map(line => parseInt(line.split(':')[1], 10));
             
-            productsDb = {};
+            let db = {};
             
             for (let i = 0; i < lines.length; i++) {
                 const parts = lines[i].split(':');
@@ -651,27 +675,27 @@
                 const level = parts[4];
                 const endByte = (i + 1 < startBytes.length && !isNaN(startBytes[i+1])) ? String(startBytes[i+1] - 1) : '';
                 
-                if (!productsDb[product]) {
-                    productsDb[product] = { levels: new Set(), items: {}, isVector: false };
+                if (!db[product]) {
+                    db[product] = { levels: new Set(), items: {}, isVector: false };
                 }
                 
-                productsDb[product].levels.add(level);
-                productsDb[product].items[level] = { start: startBytes[i], end: endByte };
+                db[product].levels.add(level);
+                db[product].items[level] = { start: startBytes[i], end: endByte };
             }
 
             // Synthesize 'WIND' Vector product where both U and V exist
-            if (productsDb['UGRD'] && productsDb['VGRD']) {
-                const uLevels = Array.from(productsDb['UGRD'].levels);
-                const commonLevels = uLevels.filter(l => productsDb['VGRD'].levels.has(l));
+            if (db['UGRD'] && db['VGRD']) {
+                const uLevels = Array.from(db['UGRD'].levels);
+                const commonLevels = uLevels.filter(l => db['VGRD'].levels.has(l));
                 if (commonLevels.length > 0) {
-                    productsDb['WIND'] = {
+                    db['WIND'] = {
                         isVector: true,
                         levels: new Set(commonLevels)
                     };
                 }
             }
-
-            populateProductDropdown();
+            
+            return db;
         }
 
         function populateProductDropdown() {
