@@ -329,14 +329,6 @@
                     <input type="range" id="density-slider" min="0.25" max="5.0" step="0.25" value="1.25">
                 </div>
                 <div class="control-group">
-                    <label>Vector Resolution</label>
-                    <select id="res-select">
-                        <option value="1">Standard</option>
-                        <option value="2" selected>High (2x)</option>
-                        <option value="4">Ultra (4x)</option>
-                    </select>
-                </div>
-                <div class="control-group">
                     <label>Min Speed Cutoff <span id="min-spd-label" style="color:#aaa; font-weight:normal;">5 kts</span></label>
                     <input type="range" id="min-spd-slider" min="0" max="60" step="1" value="5">
                 </div>
@@ -390,7 +382,7 @@
 
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 2000);
-            camera.position.z = 350;
+            camera.position.z = 200;
 
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setSize(width, height);
@@ -421,8 +413,11 @@
 
             // Start oriented over North America
             if (!is2DView) {
-                earthGroup.rotation.y = Math.PI / 1.5; 
-                earthGroup.rotation.x = Math.PI / 8;
+                earthGroup.rotation.y = 75 * (Math.PI / 180); 
+                earthGroup.rotation.x = 38 * (Math.PI / 180);
+            } else {
+                earthGroup.position.x = 75 * (PLANE_WIDTH / 360);
+                earthGroup.position.y = -38 * (PLANE_HEIGHT / 180);
             }
 
             setupInteraction(container);
@@ -469,7 +464,7 @@
             container.addEventListener('wheel', (e) => {
                 if (e.target.closest('.ui-overlay')) return;
                 const zoomDelta = e.deltaY * 0.5;
-                camera.position.z = Math.max(120, Math.min(600, camera.position.z + zoomDelta));
+                camera.position.z = Math.max(20, Math.min(600, camera.position.z + zoomDelta));
             }, { passive: true });
             
             window.addEventListener('resize', () => {
@@ -821,15 +816,6 @@
             btn.disabled = true;
             document.getElementById('data-tooltip').style.display = 'none';
             currentDecodedData = null; // Clear old data
-            if (cloudMesh) {
-                earthGroup.remove(cloudMesh);
-                if (cloudMesh.geometry) cloudMesh.geometry.dispose();
-                if (cloudMesh.material) {
-                    if (cloudMesh.material.map) cloudMesh.material.map.dispose();
-                    cloudMesh.material.dispose();
-                }
-                cloudMesh = null;
-            }
             
             const prod = document.getElementById('product-select').value;
             const level = document.getElementById('level-select').value;
@@ -1110,7 +1096,7 @@
             const spacingDeg = parseFloat(document.getElementById('density-slider').value);
             const gridRes = 180.0 / (ny - 1);
             const step = Math.max(1, Math.round(spacingDeg / gridRes));
-            const resMult = parseInt(document.getElementById('res-select').value);
+            const resMult = 2;
             const minSpdCutoff = parseInt(document.getElementById('min-spd-slider').value);
 
             const cw = 3600 * resMult;
@@ -1212,7 +1198,6 @@
             document.getElementById('resolution-select').addEventListener('change', loadNWPInventory);
             
             document.getElementById('level-select').addEventListener('change', fetchAndRenderLayer);
-            document.getElementById('res-select').addEventListener('change', fetchAndRenderLayer);
             
             // FHR Slider listener
             document.getElementById('fhr-slider').addEventListener('input', (e) => {
@@ -1268,10 +1253,12 @@
 
                 if (is2DView) {
                     earthGroup.rotation.set(0, 0, 0);
+                    earthGroup.position.x = 75 * (PLANE_WIDTH / 360);
+                    earthGroup.position.y = -38 * (PLANE_HEIGHT / 180);
                 } else {
                     earthGroup.position.set(0, 0, 0);
-                    earthGroup.rotation.y = Math.PI / 1.5;
-                    earthGroup.rotation.x = Math.PI / 8;
+                    earthGroup.rotation.y = 75 * (Math.PI / 180);
+                    earthGroup.rotation.x = 38 * (Math.PI / 180);
                 }
             });
 
