@@ -390,7 +390,8 @@
         let scene, camera, renderer, earthGroup, earthSphere, dataMesh, cloudMesh;
         let isDragging = false;
         let prevMouse = { x: 0, y: 0 };
-        let is2DView = localStorage.getItem('is2DView') === 'true';
+        let saved2D = localStorage.getItem('is2DView');
+        let is2DView = saved2D !== null ? saved2D === 'true' : window.innerWidth <= 768;
 
         // Global State variables for interactive data lookups
         let currentUrlBase = "";
@@ -1194,13 +1195,14 @@
             const resMult = 1;
             const minSpdCutoff = parseInt(document.getElementById('min-spd-slider').value);
 
-            const cw = 3600 * resMult;
-            const ch = 1800 * resMult;
+            const cw = 2048;
+            const ch = 1024;
+            const drawScale = 2048 / 3600;
             const canvas = document.createElement('canvas');
             canvas.width = cw;
             canvas.height = ch;
             const ctx = canvas.getContext('2d');
-            ctx.lineWidth = 1.0 * resMult;
+            ctx.lineWidth = 1.0 * resMult * drawScale;
 
             for (let j = 0; j < ny; j += step) {
                 for (let i = 0; i < nx; i += step) {
@@ -1227,7 +1229,7 @@
                     ctx.strokeStyle = barbColor;
                     ctx.fillStyle = barbColor;
 
-                    const slen = 16 * resMult;
+                    const slen = 16 * resMult * drawScale;
                     ctx.beginPath();
                     ctx.moveTo(0, 0);
                     ctx.lineTo(slen, 0);
@@ -1238,11 +1240,11 @@
                     
                     const isNorthernHemisphere = j < (ny / 2);
                     const bAng = isNorthernHemisphere ? Math.PI * 0.75 : -Math.PI * 0.75; 
-                    const bLen = 8 * resMult;
-                    const penW = 3 * resMult;
-                    const penH = 6 * resMult;
-                    const pennantSpacing = 7 * resMult;
-                    const barbSpacing = 4 * resMult;
+                    const bLen = 8 * resMult * drawScale;
+                    const penW = 3 * resMult * drawScale;
+                    const penH = 6 * resMult * drawScale;
+                    const pennantSpacing = 7 * resMult * drawScale;
+                    const barbSpacing = 4 * resMult * drawScale;
 
                     while (rem >= 50) {
                         ctx.beginPath();
