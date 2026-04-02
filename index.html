@@ -24,6 +24,7 @@
             position: absolute;
             inset: 0;
             cursor: grab;
+            touch-action: none;
         }
         #render-container:active {
             cursor: grabbing;
@@ -501,6 +502,7 @@
 
             container.addEventListener('touchstart', (e) => {
                 if (e.target.closest('.ui-overlay') || e.target.closest('#hamburger-btn')) return;
+                e.preventDefault();
                 if (e.touches.length === 1) {
                     isDragging = true;
                     mousedownPos = { x: e.touches[0].clientX, y: e.touches[0].clientY };
@@ -514,10 +516,11 @@
                     );
                     initialCamZ = camera.position.z;
                 }
-            }, { passive: true });
+            }, { passive: false });
 
             window.addEventListener('touchmove', (e) => {
                 if (e.touches.length === 1 && isDragging) {
+                    e.preventDefault();
                     const delta = { x: e.touches[0].clientX - prevMouse.x, y: e.touches[0].clientY - prevMouse.y };
                     if (is2DView) {
                         earthGroup.position.x += delta.x * (camera.position.z / 500);
@@ -528,6 +531,7 @@
                     }
                     prevMouse = { x: e.touches[0].clientX, y: e.touches[0].clientY };
                 } else if (e.touches.length === 2 && initialPinchDist) {
+                    e.preventDefault();
                     const currentDist = Math.hypot(
                         e.touches[0].clientX - e.touches[1].clientX,
                         e.touches[0].clientY - e.touches[1].clientY
@@ -535,7 +539,7 @@
                     const zoomFactor = initialPinchDist / currentDist;
                     camera.position.z = Math.max(20, Math.min(600, initialCamZ * zoomFactor));
                 }
-            }, { passive: true });
+            }, { passive: false });
 
             window.addEventListener('touchend', (e) => {
                 if (isDragging && e.touches.length === 0) {
@@ -550,7 +554,7 @@
                 if (e.touches.length === 0) {
                     isDragging = false;
                 }
-            });
+            }, { passive: false });
             
             container.addEventListener('wheel', (e) => {
                 if (e.target.closest('.ui-overlay')) return;
@@ -1187,7 +1191,7 @@
             const spacingDeg = parseFloat(document.getElementById('density-slider').value);
             const gridRes = 180.0 / (ny - 1);
             const step = Math.max(1, Math.round(spacingDeg / gridRes));
-            const resMult = 2;
+            const resMult = 1;
             const minSpdCutoff = parseInt(document.getElementById('min-spd-slider').value);
 
             const cw = 3600 * resMult;
