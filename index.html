@@ -358,7 +358,7 @@
         const PLANE_HEIGHT = 200;
         const S3_BUCKET_URL = 'https://noaa-gfs-bdp-pds.s3.amazonaws.com/';
         
-        let scene, camera, renderer, earthGroup, earthSphere, dataMesh;
+        let scene, camera, renderer, earthGroup, earthSphere, dataMesh, cloudMesh;
         let isDragging = false;
         let prevMouse = { x: 0, y: 0 };
         let is2DView = localStorage.getItem('is2DView') === 'true';
@@ -373,7 +373,7 @@
         // Human-readable aliases for common acronyms
         const PRODUCT_ALIASES = {
             'TMP': 'Temperature', 'UGRD': 'U-Wind Component', 'VGRD': 'V-Wind Component', 
-            'WIND': 'Wind Vectors (U+V)', 'RH': 'Relative Humidity', 'SPFH': 'Specific Humidity', 
+            'WIND': 'Wind Vectors (U+V)', 'WIND_TCDC': 'Winds + Total Cloud Cover', 'RH': 'Relative Humidity', 'SPFH': 'Specific Humidity', 
             'TCDC': 'Total Cloud Cover', 'LCDC': 'Low Cloud Cover', 'MCDC': 'Mid Cloud Cover', 
             'HCDC': 'High Cloud Cover', 'HGT': 'Geopotential Height', 'APCP': 'Total Precipitation', 
             'PRATE': 'Precipitation Rate', 'VVEL': 'Vertical Velocity', 'REFC': 'Composite Reflectivity', 
@@ -692,6 +692,13 @@
                         isVector: true,
                         levels: new Set(commonLevels)
                     };
+                    
+                    if (db['TCDC'] && db['TCDC'].levels.has('entire atmosphere')) {
+                        db['WIND_TCDC'] = {
+                            isVectorAndCloud: true,
+                            levels: new Set(commonLevels)
+                        };
+                    }
                 }
             }
             
@@ -703,8 +710,10 @@
             const prevVal = select.value;
             select.innerHTML = '';
             
-            // Sort products alphabetically, but prioritize WIND
+            // Sort products alphabetically, but prioritize WIND_TCDC then WIND
             const keys = Object.keys(productsDb).sort((a, b) => {
+                if (a === 'WIND_TCDC') return -1;
+                if (b === 'WIND_TCDC') return 1;
                 if (a === 'WIND') return -1;
                 if (b === 'WIND') return 1;
                 return a.localeCompare(b);
@@ -759,7 +768,7 @@
             
             if (!productsDb[productKey]) return;
 
-            if (productsDb[productKey].isVector) {
+            if (productsDb[productKey].isVector || productsDb[productKey].isVectorAndCloud) {
                 document.getElementById('vector-controls').style.display = 'block';
             } else {
                 document.getElementById('vector-controls').style.display = 'none';
@@ -812,13 +821,52 @@
             btn.disabled = true;
             document.getElementById('data-tooltip').style.display = 'none';
             currentDecodedData = null; // Clear old data
+            if (cloudMesh) {
+                earthGroup.remove(cloudMesh);
+                if (cloudMesh.geometry) cloudMesh.geometry.dispose();
+                if (cloudMesh.material) {
+                    if (cloudMesh.material.map) cloudMesh.material.map.dispose();
+                    cloudMesh.material.dispose();
+                }
+                cloudMesh = null;
+            }
             
             const prod = document.getElementById('product-select').value;
             const level = document.getElementById('level-select').value;
             const config = productsDb[prod];
 
             try {
-                if (config.isVector) {
+                if (config.isVectorAndCloud) {
+                    setStatus(`DOWNLOADING U, V, & CLOUDS...`);
+                    const uItem = productsDb['UGRD'].items[level];
+                    const vItem = productsDb['VGRD'].items[level];
+                    const cItem = productsDb['TCDC'].items['entire atmosphere'];
+                    
+                    const [uRes, vRes, cRes] = await Promise.all([
+                        fetch(currentUrlBase, { headers: { 'Range': `bytes=${uItem.start}-${uItem.end}` } }),
+                        fetch(currentUrlBase, { headers: { 'Range': `bytes=${vItem.start}-${vItem.end}` } }),
+                        fetch(currentUrlBase, { headers: { 'Range': `bytes=${cItem.start}-${cItem.end}` } })
+                    ]);
+
+                    const uBuffer = await uRes.arrayBuffer();
+                    const vBuffer = await vRes.arrayBuffer();
+                    const cBuffer = await cRes.arrayBuffer();
+
+                    setStatus("DECODING VECTORS & CLOUDS...");
+                    const uDecoded = processGribData(uBuffer);
+                    const vDecoded = processGribData(vBuffer);
+                    const cDecoded = processGribData(cBuffer);
+
+                    // Update Global State
+                    currentProductType = 'vector';
+                    currentDecodedData = { u: uDecoded, v: vDecoded, cloud: cDecoded };
+
+                    setStatus("RENDERING CLOUDS...");
+                    renderScalarToGlobe(cDecoded, 'TCDC', true);
+
+                    setStatus("RENDERING VECTOR FIELD...");
+                    renderWindsToGlobe(uDecoded, vDecoded);
+                } else if (config.isVector) {
                     setStatus(`DOWNLOADING U & V COMPONENTS...`);
                     const uItem = productsDb['UGRD'].items[level];
                     const vItem = productsDb['VGRD'].items[level];
@@ -899,7 +947,7 @@
             let t = (max === min) ? 0 : Math.max(0, Math.min(1, (val - min) / (max - min)));
             
             if (isCloud) {
-                return [255, 255, 255, Math.floor(t * 220)];
+                return [230, 230, 230, Math.floor(t * 220)];
             }
 
             // Standard Jet Colormap
@@ -949,7 +997,7 @@
             lbl.innerHTML = `<span>${formatLegendValue(min)}</span><span>${formatLegendValue(max)}</span>`;
         }
 
-        function renderScalarToGlobe(data, productCode) {
+        function renderScalarToGlobe(data, productCode, isSecondary = false) {
             const { nx, ny } = data.metadata.grid;
             const isCloud = ['TCDC', 'LCDC', 'MCDC', 'HCDC', 'RH'].includes(productCode);
             
@@ -1022,13 +1070,24 @@
             tex.magFilter = THREE.LinearFilter;
             tex.minFilter = THREE.LinearFilter;
 
-            if (dataMesh) earthGroup.remove(dataMesh);
+            if (isSecondary) {
+                if (cloudMesh) earthGroup.remove(cloudMesh);
+            } else {
+                if (dataMesh) earthGroup.remove(dataMesh);
+            }
 
-            const geom = is2DView ? new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 128, 64) : new THREE.SphereGeometry(EARTH_RADIUS + 0.4, 128, 64);
+            const geom = is2DView ? new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 128, 64) : new THREE.SphereGeometry(EARTH_RADIUS + (isSecondary ? 0.2 : 0.4), 128, 64);
             const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false });
-            dataMesh = new THREE.Mesh(geom, mat);
-            if (is2DView) dataMesh.position.z = 1;
-            earthGroup.add(dataMesh);
+            
+            if (isSecondary) {
+                cloudMesh = new THREE.Mesh(geom, mat);
+                if (is2DView) cloudMesh.position.z = 0.5;
+                earthGroup.add(cloudMesh);
+            } else {
+                dataMesh = new THREE.Mesh(geom, mat);
+                if (is2DView) dataMesh.position.z = 1;
+                earthGroup.add(dataMesh);
+            }
         }
 
         function renderWindsToGlobe(uData, vData) {
@@ -1060,7 +1119,7 @@
             canvas.width = cw;
             canvas.height = ch;
             const ctx = canvas.getContext('2d');
-            ctx.lineWidth = 2.0 * resMult;
+            ctx.lineWidth = 1.0 * resMult;
 
             for (let j = 0; j < ny; j += step) {
                 for (let i = 0; i < nx; i += step) {
@@ -1083,7 +1142,7 @@
                     
                     // Vectors use standard color generator, no sparse logic
                     const colorArr = getDynamicColor(spd, 0, plotMax, false, false);
-                    const barbColor = `rgb(${colorArr[0]},${colorArr[1]},${colorArr[2]})`;
+                    const barbColor = `rgba(${colorArr[0]},${colorArr[1]},${colorArr[2]},0.8)`;
                     ctx.strokeStyle = barbColor;
                     ctx.fillStyle = barbColor;
 
@@ -1199,6 +1258,12 @@
                     dataMesh.geometry.dispose();
                     dataMesh.geometry = is2DView ? new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 128, 64) : (currentProductType === 'vector' ? new THREE.SphereGeometry(EARTH_RADIUS + 0.8, 128, 64) : new THREE.SphereGeometry(EARTH_RADIUS + 0.4, 128, 64));
                     dataMesh.position.z = is2DView ? 1 : 0;
+                }
+                
+                if (cloudMesh) {
+                    cloudMesh.geometry.dispose();
+                    cloudMesh.geometry = is2DView ? new THREE.PlaneGeometry(PLANE_WIDTH, PLANE_HEIGHT, 128, 64) : new THREE.SphereGeometry(EARTH_RADIUS + 0.2, 128, 64);
+                    cloudMesh.position.z = is2DView ? 0.5 : 0;
                 }
 
                 if (is2DView) {
