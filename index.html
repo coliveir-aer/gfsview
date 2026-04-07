@@ -308,6 +308,9 @@
             <label style="font-size: 12px; color: #eee; cursor: pointer;">
                 <input type="checkbox" id="toggle-2d" style="vertical-align: middle;"> 2D Flat Map
             </label>
+            <label style="font-size: 12px; color: #eee; cursor: pointer; margin-left: 15px;">
+                <input type="checkbox" id="toggle-clouds" style="vertical-align: middle;" checked> Clouds
+            </label>
         </div>
         
         <div class="status-badge" id="status-indicator">INITIALIZING WASM...</div>
@@ -1162,6 +1165,7 @@
             
             if (isSecondary) {
                 cloudMesh = new THREE.Mesh(geom, mat);
+                cloudMesh.visible = document.getElementById('toggle-clouds').checked;
                 if (is2DView) cloudMesh.position.z = 0.5;
                 earthGroup.add(cloudMesh);
             } else {
@@ -1362,6 +1366,12 @@
                     earthGroup.position.set(0, 0, 0);
                     earthGroup.rotation.y = 75 * (Math.PI / 180);
                     earthGroup.rotation.x = 38 * (Math.PI / 180);
+                }
+            });
+
+            document.getElementById('toggle-clouds').addEventListener('change', (e) => {
+                if (cloudMesh) {
+                    cloudMesh.visible = e.target.checked;
                 }
             });
 
